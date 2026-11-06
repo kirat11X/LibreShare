@@ -1,0 +1,145 @@
+# CI for LibreShare (spec section 14, adapted to this repo: Dart pub workspace at the root).
+# Jobs: core (always) -> detect -> e2e-docker / app (each only once its inputs exist).
+name: ci
+
+on:
+  push:
+  pull_request:
+
+env:
+  # Keep in sync with .fvmrc and tools/env.sh (Flutter 3.47.9 ships Dart 3.13.7).
+  FLUTTER_VERSION: "3.47.9"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Resolve workspace
+        run: dart pub get
+
+      - name: Core must not import Flutter
+        run: |
+          set -u
+          if grep -RnE --include='*.dart' "package:flutter|dart:ui" packages/libreshare_core/lib; then
+            echo "::error::packages/libreshare_core must not import Flutter (platform code lives in apps/libreshare_app/lib/platform/)"
+            exit 1
+          fi
+          if grep -nE '^[[:space:]]*flutter:|sdk:[[:space:]]*flutter' packages/libreshare_core/pubspec.yaml; then
+            echo "::error::packages/libreshare_core/pubspec.yaml must not depend on Flutter"
+            exit 1
+          fi
+
+      - name: Analyze
+        run: dart analyze --fatal-infos
+
+      - name: Check formatting
+        run: dart format --output=none --set-exit-if-changed .
+
+      - name: Core tests
+        run: cd packages/libreshare_core && dart test
+
+      - name: CLI tests
+        run: cd packages/libreshare_cli && dart test
+
+      # Increment 1 acceptance command: loopback transfer of a 100 MiB random file, then cmp.
+      # Same script developers run locally (starts a receiver, sends, cmp, checks no .lspart left).
+      - name: Loopback transfer smoke (100 MiB, CLI send -> receive, cmp)
+        timeout-minutes: 10
+        run: tools/loopback_smoke.sh 100 53400
+
+  # `hashFiles()` is not available in job-level `if:` (only in step contexts), so the
+  # "does this input exist yet" guard is evaluated once here and exposed as outputs.
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      docker: ${{ steps.probe.outputs.docker }}
+      app: ${{ steps.probe.outputs.app }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: probe
+        run: |
+          if [ -f tools/docker/compose.yaml ]; then echo "docker=true" >> "$GITHUB_OUTPUT"; else echo "docker=false" >> "$GITHUB_OUTPUT"; fi
+          if [ -f apps/libreshare_app/pubspec.yaml ]; then echo "app=true" >> "$GITHUB_OUTPUT"; else echo "app=false" >> "$GITHUB_OUTPUT"; fi
+
+  e2e-docker:
+    # Equivalent of: if: hashFiles('tools/docker/compose.yaml') != ''
+    if: needs.detect.outputs.docker == 'true'
+    needs: [core, detect]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      # Spec 12 Inc 2 FR-02 / spec 14: alice, bob, carol (receivers) and the tester on one user-defined
+      # /24 bridge; multicast discovery <= 3 s, UDP 53318 dropped -> subnet scan <= 10 s, a discovery-driven
+      # 20 MiB transfer, Receive-Off visibility, and the AOT loopback datapoint. See docs/test-reports/inc2-docker.md.
+      - name: Docker end-to-end tests
+        run: docker compose -f tools/docker/compose.yaml up --build --abort-on-container-exit --exit-code-from tester
+      - name: Container logs (on failure)
+        if: failure()
+        run: docker compose -f tools/docker/compose.yaml logs --no-color --tail=300
+      - name: Tear down
+        if: always()
+        run: docker compose -f tools/docker/compose.yaml down -v --remove-orphans
+
+  app:
+    # Equivalent of: if: hashFiles('apps/libreshare_app/pubspec.yaml') != ''
+    if: needs.detect.outputs.app == 'true'
+    needs: [core, detect]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: linux }
+          - { os: ubuntu-latest, target: apk }
+          - { os: windows-latest, target: windows }
+          - { os: macos-latest, target: macos }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - if: matrix.target == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev xvfb
+
+      - if: matrix.target == 'apk'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Widget and unit tests
+        run: cd apps/libreshare_app && flutter pub get && flutter test
+
+      - name: Linux integration tests
+        if: matrix.target == 'linux' && hashFiles('apps/libreshare_app/integration_test/**') != ''
+        run: cd apps/libreshare_app && xvfb-run -a flutter test integration_test -d linux
+
+      - name: Build
+        run: cd apps/libreshare_app && flutter build ${{ matrix.target }} --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libreshare-${{ matrix.target }}
+          path: apps/libreshare_app/build

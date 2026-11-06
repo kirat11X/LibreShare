@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://libreshare.example/protocol/lsp1/schemas/pair-request.schema.json",
+  "title": "PairRequest",
+  "description": "Body of POST /api/v1/pair (QR pairing, LSP-1 sections 4.3.4 and 5.3; LSP/1.1 secure profile, Increment 3). The scanning device (B) proves it holds the invite secret `S` from the `libreshare://pair` QR code: `mac = HMAC-SHA256(S, \"LSP1-PAIR-REQ\\0\" || fpB || fpA || nB)`, where fpB is the scanner's fingerprint, fpA the inviter's and nB the decoded `nonce`. The request needs a valid `X-LS-Auth` proof, and `sender.fingerprint` MUST equal the fingerprint the proof names (else 401 AUTH_INVALID). The request is held open until the inviter's user decides, at most 125 s. Mirrors PairRequest in packages/libreshare_core/lib/src/model/session_models.dart. Unknown members MUST be ignored.",
+  "type": "object",
+  "required": ["sender", "nonce", "mac"],
+  "properties": {
+    "sender": {
+      "description": "The scanning device. Unlike in a SessionRequest its `fingerprint` is mandatory: pairing pins it.",
+      "allOf": [
+        { "$ref": "device-info.schema.json" },
+        {
+          "required": ["fingerprint"],
+          "properties": {
+            "fingerprint": { "pattern": "^[0-9A-F]{64}$" }
+          }
+        }
+      ]
+    },
+    "nonce": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{22}$",
+      "description": "nB: 16 random bytes, base64url, 22 characters."
+    },
+    "mac": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43}$",
+      "description": "HMAC-SHA256 (32 bytes), base64url, 43 characters."
+    }
+  },
+  "examples": [
+    {
+      "sender": {
+        "proto": "libreshare",
+        "v": "1.1",
+        "deviceId": "5b0f7d8e-3c1a-4f2b-9d6e-1a2b3c4d5e6f",
+        "alias": "Ravi-ThinkPad",
+        "platform": "windows",
+        "deviceType": "desktop",
+        "fingerprint": "FC074C4445C65D5C5208058734A816CFC5E77A51D5D9B596AD324828CEFA422E",
+        "port": 53318,
+        "addrs": [{ "ip": "192.168.1.23", "if": "wifi" }],
+        "caps": ["resume", "sas", "pair"]
+      },
+      "nonce": "mL7r9b203fdAg3d24bsQVw",
+      "mac": "94UrvphYgLASKK6dQM1yC90yHV1SDHOct7JdD__qwV0"
+    }
+  ]
+}

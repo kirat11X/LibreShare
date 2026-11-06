@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://libreshare.example/protocol/lsp1/schemas/file-state.schema.json",
+  "title": "FileState",
+  "description": "Body of GET /api/v1/sessions/{sid}/files/{fid}/state (resume bitmap). `receivedRanges` is a sorted list of INCLUSIVE chunk-index pairs [first,last]: [[0,41],[50,50]] means chunks 0..41 and 50. A 0-byte file has chunkCount 0 and no ranges. Mirrors FileState in packages/libreshare_core/lib/src/model/session_models.dart. Unknown members MUST be ignored.",
+  "type": "object",
+  "required": ["chunkCount"],
+  "properties": {
+    "receivedRanges": { "$ref": "#/$defs/chunkRanges" },
+    "chunkCount": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Total number of chunks of the file."
+    }
+  },
+  "$defs": {
+    "chunkRanges": {
+      "type": "array",
+      "description": "Sorted, non-overlapping, non-adjacent list of inclusive [first,last] chunk-index pairs with first <= last. Default empty.",
+      "items": {
+        "type": "array",
+        "minItems": 2,
+        "maxItems": 2,
+        "items": { "type": "integer", "minimum": 0 }
+      }
+    }
+  },
+  "examples": [
+    { "receivedRanges": [[0, 41]], "chunkCount": 1250 },
+    { "receivedRanges": [[0, 41], [50, 50]], "chunkCount": 1250 },
+    { "receivedRanges": [], "chunkCount": 0 }
+  ]
+}

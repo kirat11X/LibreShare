@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://libreshare.example/protocol/lsp1/schemas/sas-reveal.schema.json",
+  "title": "SasReveal",
+  "description": "Request body of POST /api/v1/sessions/{sid}/sas (LSP-1 sections 4.3.4 and 5.1; LSP/1.1 secure profile, Increment 3): the sender reveals its SAS nonce `Ns` after it received the receiver's nonce `Nr` in `SessionStatus.sas`. The receiver recomputes the commitment `SHA-256(\"LSP1-SAS-C\\0\" || Ns || fpS || fpR)` and compares it with the `sasCommit` of the session request: a mismatch is 401 AUTH_INVALID and the session fails with PROTOCOL_ERROR. The 200 response is a SessionStatus (PENDING, still carrying `sas`). The request needs a valid `X-LS-Auth` proof. `nonce` is 16 random bytes, base64url without padding, exactly 22 characters. The object has the same shape as `SessionStatus.sas`. Unknown members MUST be ignored.",
+  "type": "object",
+  "required": ["nonce"],
+  "properties": {
+    "nonce": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{22}$",
+      "description": "The sender's SAS nonce Ns: 16 random bytes, base64url, 22 characters."
+    }
+  },
+  "examples": [
+    { "nonce": "9thLfjlf5QjwI69c7yamsg" }
+  ]
+}

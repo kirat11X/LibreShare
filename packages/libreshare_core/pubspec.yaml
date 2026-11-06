@@ -1,0 +1,21 @@
+name: libreshare_core
+description: GUI-free pure-Dart core of LibreShare (LSP/1 protocol, transfer, security, fallback).
+publish_to: none
+resolution: workspace
+environment:
+  sdk: ^3.13.0
+dependencies:
+  crypto: ^3.0.8
+  logging: ^1.3.0
+  meta: ^1.19.0
+  mime: ^2.1.0
+  path: ^1.9.1
+  pointycastle: ^4.0.0
+  shelf: ^1.4.3
+  shelf_router: ^1.1.5
+  uuid: ^4.6.0
+dev_dependencies:
+  json_schema: ^5.2.2
+  lints: ^6.1.0
+  mocktail: ^1.0.5
+  test: any

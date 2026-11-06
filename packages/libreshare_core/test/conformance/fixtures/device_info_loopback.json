@@ -1,0 +1,12 @@
+{
+  "proto": "libreshare",
+  "v": "1.0",
+  "deviceId": "0f6c2a9e-7b1d-4c3e-8a5f-9e8d7c6b5a43",
+  "alias": "Küche-Laptop ✓",
+  "platform": "linux",
+  "deviceType": "desktop",
+  "fingerprint": "",
+  "port": 53400,
+  "addrs": [{ "ip": "127.0.0.1", "if": "unknown" }],
+  "caps": ["resume"]
+}

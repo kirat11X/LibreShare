@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FileProvider roots for "Open" on received files (FileOpenerChannel.kt). Shared storage and the
+     app's own external files folder (the default receive folder). Nothing else is exposed. -->
+<paths>
+    <external-path name="shared_storage" path="." />
+    <external-files-path name="app_files" path="." />
+</paths>

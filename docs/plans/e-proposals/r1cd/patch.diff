@@ -1,0 +1,169 @@
+--- a/apps/libreshare_app/lib/services/paths.dart
++++ b/apps/libreshare_app/lib/services/paths.dart
+@@ -18,9 +18,17 @@
+   return buf.toString();
+ }
+ 
++final RegExp _driveRoot = RegExp(r'^(?:\\\\\?\\)?[A-Za-z]:[/\\]');
++final RegExp _uncRoot = RegExp(r'^(?:\\\\\?\\UNC\\|\\\\)[^/\\]+[/\\][^/\\]+');
++
+ /// Directory part of [path] (handles both separators); '.' when there is none.
++/// Windows roots (`C:\`, `\\?\C:\`, `\\host\share`, `\\?\UNC\host\share`) are
++/// their own parent and are never truncated.
+ String parentDir(String path) {
++  final root = _driveRoot.firstMatch(path) ?? _uncRoot.firstMatch(path);
++  final rootLen = root?.end ?? 0;
+   final i = path.lastIndexOf(RegExp(r'[/\\]'));
++  if (rootLen > 0 && i < rootLen) return path.substring(0, rootLen);
+   if (i < 0) return '.';
+   if (i == 0) return path.substring(0, 1);
+   return path.substring(0, i);
+--- a/apps/libreshare_app/lib/services/file_launcher.dart
++++ b/apps/libreshare_app/lib/services/file_launcher.dart
+@@ -16,6 +16,48 @@
+   Future<bool> showInFolder(String path);
+ }
+ 
++/// A process to start: [executable] with [arguments] (one list element per
++/// argument; Dart quotes them for the platform).
++class LaunchCommand {
++  const LaunchCommand(this.executable, this.arguments);
++
++  final String executable;
++  final List<String> arguments;
++}
++
++/// The command that opens [path] with the default application, or null when
++/// [platform] (`Platform.operatingSystem`) has no process launcher.
++LaunchCommand? openCommand(String path, {required String platform}) {
++  switch (platform) {
++    case 'linux':
++      return LaunchCommand('xdg-open', [path]);
++    case 'windows':
++      return LaunchCommand('rundll32', [
++        'url.dll,FileProtocolHandler',
++        path.replaceAll('/', r'\'),
++      ]);
++    case 'macos':
++      return LaunchCommand('open', [path]);
++  }
++  return null;
++}
++
++/// The command that reveals [path] in the file manager, or null.
++LaunchCommand? showInFolderCommand(String path, {required String platform}) {
++  switch (platform) {
++    case 'linux':
++      return LaunchCommand('xdg-open', [parentDir(path)]);
++    case 'windows':
++      return LaunchCommand('explorer.exe', [
++        '/select,',
++        path.replaceAll('/', r'\'),
++      ]);
++    case 'macos':
++      return LaunchCommand('open', ['-R', path]);
++  }
++  return null;
++}
++
+ /// Uses `xdg-open` (Linux), `rundll32`/`explorer` (Windows), `open` (macOS).
+ /// Android and iOS have no equivalent without a plugin: returns false and the
+ /// UI shows where the file is.
+@@ -23,26 +65,21 @@
+   const SystemFileLauncher();
+ 
+   @override
+-  Future<bool> open(String path) async {
+-    if (Platform.isLinux) return _start('xdg-open', [path]);
+-    if (Platform.isWindows) {
+-      return _start('rundll32', ['url.dll,FileProtocolHandler', path]);
+-    }
+-    if (Platform.isMacOS) return _start('open', [path]);
+-    return false;
+-  }
++  Future<bool> open(String path) =>
++      _start(openCommand(path, platform: Platform.operatingSystem));
+ 
+   @override
+-  Future<bool> showInFolder(String path) async {
+-    if (Platform.isLinux) return _start('xdg-open', [parentDir(path)]);
+-    if (Platform.isWindows) return _start('explorer.exe', ['/select,$path']);
+-    if (Platform.isMacOS) return _start('open', ['-R', path]);
+-    return false;
+-  }
++  Future<bool> showInFolder(String path) =>
++      _start(showInFolderCommand(path, platform: Platform.operatingSystem));
+ 
+-  Future<bool> _start(String exe, List<String> args) async {
++  Future<bool> _start(LaunchCommand? cmd) async {
++    if (cmd == null) return false;
+     try {
+-      await Process.start(exe, args, mode: ProcessStartMode.detached);
++      await Process.start(
++        cmd.executable,
++        cmd.arguments,
++        mode: ProcessStartMode.detached,
++      );
+       return true;
+     } on Object {
+       return false;
+--- a/packages/libreshare_core/lib/src/transfer/filename_sanitizer.dart
++++ b/packages/libreshare_core/lib/src/transfer/filename_sanitizer.dart
+@@ -248,6 +248,30 @@
+   return '$cutStem$suffix$ext';
+ }
+ 
++/// True only if [candidate] is strictly inside [root] (equal -> false).
++///
++/// [windows] null means `Platform.isWindows`. With `windows: true` the
++/// extended-length prefix is dropped (`\\?\C:\x` == `C:\x`,
++/// `\\?\UNC\h\s\x` == `\\h\s\x`), `/` and `\` are both separators, the
++/// comparison ignores case and `.`/`..` are normalised. With `windows: false`
++/// it is `package:path`'s POSIX `isWithin`.
++bool isPathWithin(String root, String candidate, {bool? windows}) {
++  if (!(windows ?? Platform.isWindows)) {
++    return p.posix.isWithin(root, candidate);
++  }
++  String norm(String s) {
++    var t = s.replaceAll('/', r'\');
++    if (t.startsWith(r'\\?\UNC\')) {
++      t = r'\\' + t.substring(8);
++    } else if (t.startsWith(r'\\?\')) {
++      t = t.substring(4);
++    }
++    return t;
++  }
++
++  return p.windows.isWithin(norm(root), norm(candidate));
++}
++
+ /// Throws [LsErrorCode.badRequest] unless [path] (which need not exist yet) is
+ /// strictly inside [root] after resolving symlinks of its existing ancestors.
+ void assertInsideDir(Directory root, String path) {
+@@ -278,7 +302,7 @@
+     throw escape('unresolvable link');
+   }
+   final resolved = tail.isEmpty ? real : p.joinAll([real, ...tail]);
+-  if (!p.isWithin(rootReal, resolved)) throw escape('outside');
++  if (!isPathWithin(rootReal, resolved)) throw escape('outside');
+ }
+ 
+ String _realOrSelf(String dir) {
+@@ -357,7 +381,7 @@
+       if (type == FileSystemEntityType.link) {
+         final resolved = _resolveDirLink(candPath);
+         if (resolved != null &&
+-            (resolved == rootReal || p.isWithin(rootReal, resolved))) {
++            (resolved == rootReal || isPathWithin(rootReal, resolved))) {
+           cur = candPath;
+           curReal = resolved;
+           break;
+@@ -379,7 +403,7 @@
+ 
+   File accept(String candidate) {
+     final resolved = p.join(curReal, candidate);
+-    if (!p.isWithin(rootReal, resolved)) {
++    if (!isPathWithin(rootReal, resolved)) {
+       throw LsException(
+         LsErrorCode.badRequest,
+         'target path escapes download directory',

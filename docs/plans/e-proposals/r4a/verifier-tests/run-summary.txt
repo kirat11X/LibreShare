@@ -1,0 +1,119 @@
+2026-11-06 14:18:28 WAIT r4a-B1
+2026-11-06 14:18:39 WAIT r4a-B2
+2026-11-06 14:20:13 capB1-1 start: dart test -j 1 test/security/connection_cap_test.dart
+2026-11-06 14:20:40 capB1-1 rc=0 | 00:26 +12: All tests passed!
+2026-11-06 14:20:40 capB1-2 start: dart test -j 1 test/security/connection_cap_test.dart
+2026-11-06 14:21:08 capB1-2 rc=0 | 00:26 +12: All tests passed!
+2026-11-06 14:21:08 capB1-3 start: dart test -j 1 test/security/connection_cap_test.dart
+2026-11-06 14:21:35 capB1-3 rc=0 | 00:26 +12: All tests passed!
+2026-11-06 14:21:35 dir-security start: dart test -j 1 test/security
+2026-11-06 14:23:05 dir-security rc=0 | 01:28 +508: All tests passed!
+2026-11-06 14:23:05 dir-integration start: dart test -j 1 test/integration
+2026-11-06 14:23:59 dir-integration rc=0 | 00:52 +128 ~1: All tests passed!
+2026-11-06 14:23:59 dir-conformance start: dart test -j 1 test/conformance
+2026-11-06 14:24:08 dir-conformance rc=0 | 00:07 +389: All tests passed!
+2026-11-06 14:24:08 dir-unitapi start: dart test -j 1 test/unit/api_server_stop_test.dart test/unit/api_server_stop_p3_test.dart test/unit/port_fallback_test.dart test/unit/api_client_test.dart test/unit/api_client_tls_test.dart
+2026-11-06 14:24:16 dir-unitapi rc=0 | 00:07 +105: All tests passed!
+2026-11-06 14:24:16 DONE r4a-B1
+2026-11-06 14:24:24 probes-analyze start: dart analyze test/security/connection_cap_verifier_probes_test.dart
+2026-11-06 14:24:25 probes-analyze rc=0 | No issues found!
+2026-11-06 14:24:25 probes-run start: dart test -j 1 -r expanded test/security/connection_cap_verifier_probes_test.dart
+2026-11-06 14:24:51 probes-run rc=1 | For example, 'dart test --chain-stack-traces'.
+2026-11-06 14:24:51 DONE r4a-B2
+2026-11-06 14:25:38 WAIT r4a-B2b
+2026-11-06 14:25:39 WAIT r4a-B3
+2026-11-06 14:25:40 WAIT r4a-B4
+2026-11-06 14:25:41 WAIT r4a-B5
+2026-11-06 14:25:42 WAIT r4a-B6
+2026-11-06 14:26:14 WAIT r4a-B7
+2026-11-06 14:26:15 WAIT r4a-B8
+2026-11-06 14:26:16 WAIT r4a-B9
+2026-11-06 14:26:17 WAIT r4a-B10
+2026-11-06 14:27:18 probes-run2 start: dart test -j 1 -r expanded test/security/connection_cap_verifier_probes_test.dart
+2026-11-06 14:27:39 probes-run2 rc=0 | 00:19 +20: All tests passed!
+2026-11-06 14:27:39 DONE r4a-B2b
+2026-11-06 14:27:39 mut-a start: dart test -j 1 -r expanded test/security/connection_cap_test.dart test/security/connection_cap_verifier_probes_test.dart
+2026-11-06 14:28:36 mut-a rc=1 | For example, 'dart test --chain-stack-traces'.
+2026-11-06 14:28:36 restore-diff after a rc=0
+2026-11-06 14:28:36 mut-b start: dart test -j 1 -r expanded test/security/connection_cap_test.dart test/security/connection_cap_verifier_probes_test.dart
+2026-11-06 14:29:45 mut-b rc=1 | For example, 'dart test --chain-stack-traces'.
+2026-11-06 14:29:45 restore-diff after b rc=0
+2026-11-06 14:29:45 mut-d start: dart test -j 1 -r expanded test/security/connection_cap_test.dart test/security/connection_cap_verifier_probes_test.dart
+2026-11-06 14:30:36 mut-d rc=1 | For example, 'dart test --chain-stack-traces'.
+2026-11-06 14:30:37 restore-diff after d rc=0
+2026-11-06 14:30:37 mut-d2 start: dart test -j 1 -r expanded test/security/connection_cap_test.dart test/security/connection_cap_verifier_probes_test.dart
+2026-11-06 14:31:10 WAIT r4a-B11
+2026-11-06 14:31:24 mut-d2 rc=0 | 00:45 +32: All tests passed!
+2026-11-06 14:31:24 restore-diff after d2 rc=0
+2026-11-06 14:31:24 DONE r4a-B3
+2026-11-06 14:31:24 mut-e start: dart test -j 1 -r expanded test/security/connection_cap_test.dart test/security/connection_cap_verifier_probes_test.dart
+2026-11-06 14:32:39 mut-e rc=1 | For example, 'dart test --chain-stack-traces'.
+2026-11-06 14:32:39 restore-diff after e rc=0
+2026-11-06 14:32:39 mut-f1 start: dart test -j 1 -r expanded test/security/connection_cap_test.dart test/security/connection_cap_verifier_probes_test.dart
+2026-11-06 14:33:36 mut-f1 rc=1 | For example, 'dart test --chain-stack-traces'.
+2026-11-06 14:33:36 restore-diff after f1 rc=0
+2026-11-06 14:33:36 mut-f2 start: dart test -j 1 -r expanded test/security/connection_cap_test.dart test/security/connection_cap_verifier_probes_test.dart
+2026-11-06 14:34:45 mut-f2 rc=1 | For example, 'dart test --chain-stack-traces'.
+2026-11-06 14:34:45 restore-diff after f2 rc=0
+2026-11-06 14:34:45 mut-g start: dart test -j 1 -r expanded test/security/connection_cap_test.dart test/security/connection_cap_verifier_probes_test.dart
+2026-11-06 14:35:31 mut-g rc=1 | For example, 'dart test --chain-stack-traces'.
+2026-11-06 14:35:31 restore-diff after g rc=0
+2026-11-06 14:35:31 DONE r4a-B4
+2026-11-06 14:35:31 mut-h start: dart test -j 1 -r expanded test/security/connection_cap_test.dart test/security/connection_cap_verifier_probes_test.dart
+2026-11-06 14:36:14 mut-h rc=1 | For example, 'dart test --chain-stack-traces'.
+2026-11-06 14:36:14 restore-diff after h rc=0
+2026-11-06 14:36:14 mut-i start: dart test -j 1 -r expanded test/security/connection_cap_test.dart test/security/connection_cap_verifier_probes_test.dart
+2026-11-06 14:36:57 mut-i rc=1 | For example, 'dart test --chain-stack-traces'.
+2026-11-06 14:36:57 restore-diff after i rc=0
+2026-11-06 14:36:57 mut-j start: dart test -j 1 -r expanded test/security/connection_cap_test.dart test/security/connection_cap_verifier_probes_test.dart
+2026-11-06 14:37:44 mut-j rc=1 | For example, 'dart test --chain-stack-traces'.
+2026-11-06 14:37:44 restore-diff after j rc=0
+2026-11-06 14:37:44 DONE r4a-B5
+2026-11-06 14:37:44 mut-fixA start: dart test -j 1 -r expanded test/security/connection_cap_test.dart test/security/connection_cap_verifier_probes_test.dart
+2026-11-06 14:38:31 mut-fixA rc=0 | 00:45 +32: All tests passed!
+2026-11-06 14:38:31 restore-diff after fixA rc=0
+2026-11-06 14:38:31 DONE r4a-B6
+2026-11-06 14:38:34 core-full start: dart test -j 1
+2026-11-06 14:38:51 WAIT r4a-B12
+2026-11-06 14:42:08 core-full rc=0 | 03:31 +2619 ~1: All tests passed!
+2026-11-06 14:42:08 DONE r4a-B7
+2026-11-06 14:42:08 cli-full start: dart test -j 1
+2026-11-06 14:43:18 cli-full rc=1 | For example, 'dart test --chain-stack-traces'.
+2026-11-06 14:43:18 DONE r4a-B8
+2026-11-06 14:43:18 smoke-plain start: tools/loopback_smoke.sh 100 53971
+2026-11-06 14:43:25 smoke-plain rc=0 | LOOPBACK OK: 100 MiB byte-identical
+2026-11-06 14:43:25 smoke-secure start: tools/loopback_smoke.sh 100 53972 --secure
+2026-11-06 14:43:34 smoke-secure rc=0 | LOOPBACK OK: 100 MiB byte-identical
+2026-11-06 14:43:34 DONE r4a-B9
+2026-11-06 14:43:34 analyze-root start: dart analyze --fatal-infos
+2026-11-06 14:43:39 analyze-root rc=0 | No issues found!
+2026-11-06 14:43:39 format-root start: dart format --output=none --set-exit-if-changed .
+2026-11-06 14:43:41 format-root rc=0 | Formatted 320 files (0 changed) in 1.72 seconds.
+2026-11-06 14:43:41 DONE r4a-B10
+2026-11-06 14:44:14 NOTE: real tools/loopback_smoke.sh changed at 14:03 (after the 13:52 snapshot); copied into clone; re-running cli suite + both smokes
+2026-11-06 14:44:14 WAIT r4a-B13
+2026-11-06 15:05:23 mut-c start: dart test -j 1 -r expanded test/security/connection_cap_test.dart test/security/connection_cap_verifier_probes_test.dart
+2026-11-06 15:06:23 mut-c rc=1 | For example, 'dart test --chain-stack-traces'.
+2026-11-06 15:06:23 restore-diff after c rc=0
+2026-11-06 15:06:23 DONE r4a-B11
+2026-11-06 15:06:23 probes-run3 start: dart test -j 1 -r expanded test/security/connection_cap_verifier_probes_test.dart
+2026-11-06 15:06:45 probes-run3 rc=1 | For example, 'dart test --chain-stack-traces'.
+2026-11-06 15:06:45 mut-fixA start: dart test -j 1 -r expanded test/security/connection_cap_test.dart test/security/connection_cap_verifier_probes_test.dart
+2026-11-06 15:07:33 mut-fixA rc=0 | 00:46 +32: All tests passed!
+2026-11-06 15:07:33 restore-diff after fixA rc=0
+2026-11-06 15:07:33 DONE r4a-B12
+2026-11-06 15:07:38 cli-full2 start: dart test -j 1
+2026-11-06 15:08:58 cli-full2 rc=0 | 01:18 +77: All tests passed!
+2026-11-06 15:08:58 smoke-plain2 start: tools/loopback_smoke.sh 100 53971
+2026-11-06 15:09:06 smoke-plain2 rc=0 | LOOPBACK OK: 100 MiB byte-identical
+2026-11-06 15:09:06 smoke-secure2 start: tools/loopback_smoke.sh 100 53972 --secure
+2026-11-06 15:09:17 smoke-secure2 rc=0 | LOOPBACK OK: 100 MiB byte-identical
+2026-11-06 15:09:17 DONE r4a-B13
+2026-11-06 15:09:38 WAIT r4a-B14
+2026-11-06 15:30:31 smoke-plain3 start: tools/loopback_smoke.sh 100 53971
+2026-11-06 15:30:39 smoke-plain3 rc=0 | LOOPBACK OK: 100 MiB byte-identical
+2026-11-06 15:30:39 smoke-plain4 start: tools/loopback_smoke.sh 100 53971
+2026-11-06 15:30:46 smoke-plain4 rc=0 | LOOPBACK OK: 100 MiB byte-identical
+2026-11-06 15:30:46 smoke-secure3 start: tools/loopback_smoke.sh 100 53972 --secure
+2026-11-06 15:30:55 smoke-secure3 rc=0 | LOOPBACK OK: 100 MiB byte-identical
+2026-11-06 15:30:55 DONE r4a-B14

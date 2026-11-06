@@ -1,0 +1,78 @@
+# LibreShare headless node, Linux Docker Engine. For Docker Desktop (Windows/macOS) use
+# compose.windows.yaml instead: host networking does not reach the LAN there.
+#
+#   deploy/install.sh                       # recommended: checks, builds, starts, prints the peer link
+#   docker compose -f deploy/docker/compose.linux.yaml --env-file deploy/docker/.env up -d --build
+#
+# network_mode: host is deliberate. LAN discovery is UDP multicast (224.0.0.168:53318) and mDNS;
+# Docker bridge networks do not forward LAN multicast, so a bridged node would be invisible to the
+# other devices and could not see them either. With host networking the container uses the host's
+# interfaces directly (no `ports:` mapping exists or is needed). Consequence: the node's TCP port
+# (LS_PORT, default 53318) is opened on the host itself, so a host firewall (firewalld/ufw) must
+# allow it; Docker does not do that for host networking. install.sh prints the exact commands.
+#
+# PROTOTYPE WARNING: plain HTTP, no TLS/PIN yet, auto-accept on. Trusted private networks only.
+name: libreshare
+
+services:
+  libreshare:
+    image: libreshare/node:local
+    # Built here, never pulled: a foreign image of that name must not be run by accident.
+    pull_policy: never
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+      args:
+        DART_VERSION: "3.13.7"
+    labels:
+      dev.libreshare.install: "1"
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 10s
+    network_mode: host
+
+    # Run as the host user (install.sh writes LS_UID/LS_GID to the env file) so that received
+    # files in the bind-mounted folder are yours. 10001 = the image's own user.
+    user: "${LS_UID:-10001}:${LS_GID:-10001}"
+
+    # Hardening: nothing is written outside /data, /config and /tmp.
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    cpus: 1.5
+    pids_limit: 256
+
+    environment:
+      LS_ALIAS: "${LS_ALIAS:-}"
+      LS_PORT: "${LS_PORT:-53318}"
+      LS_AUTO_ACCEPT: "${LS_AUTO_ACCEPT:-1}"
+      LS_VISIBILITY: "${LS_VISIBILITY:-everyone}"
+      LS_EXTRA_ARGS: "${LS_EXTRA_ARGS:-}"
+
+    volumes:
+      # Received files. Default ./received next to this file; install.sh sets LS_DATA_DIR.
+      # selinux: z = the ":z" bind option; without it Fedora/RHEL (SELinux enforcing) deny writes.
+      # Keep this folder dedicated to LibreShare: "z" relabels it.
+      - type: bind
+        source: "${LS_DATA_DIR:-./received}"
+        target: /data
+        bind:
+          create_host_path: true
+          selinux: z
+      # State (device identity, credentials). Unused by the prototype CLI; reserved for Inc 3.
+      - type: volume
+        source: config
+        target: /config
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  config:

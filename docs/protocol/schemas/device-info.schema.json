@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://libreshare.example/protocol/lsp1/schemas/device-info.schema.json",
+  "title": "DeviceInfo",
+  "description": "LSP/1 DeviceInfo: body of GET /info and POST /register, and the `sender` member of a SessionRequest. Mirrors packages/libreshare_core/lib/src/model/device.dart. `required` lists only the members a receiver cannot default; senders SHOULD emit every member. Unknown members MUST be ignored. `fingerprint` is the uppercase hex SHA-256 of the DER certificate; it is the empty string in the plaintext profile (Increments 1 and 2, and the loopback/test profile afterwards) and always 64 characters in the LSP/1.1 secure profile (Increment 3), where `v` is `1.1`.",
+  "type": "object",
+  "required": ["deviceId", "alias"],
+  "properties": {
+    "proto": {
+      "const": "libreshare",
+      "description": "Protocol name. Default `libreshare`."
+    },
+    "v": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$",
+      "description": "Protocol version major.minor. Default `1.0` (plaintext profile). A device in the LSP/1.1 secure profile reports `1.1` (kProtocolVersionSecure). The major selects the API path (/api/v<major>); a peer with any 1.x is accepted by both profiles."
+    },
+    "deviceId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable device identifier (UUID v4 in production)."
+    },
+    "alias": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Human-readable device name shown to the peer."
+    },
+    "platform": {
+      "type": "string",
+      "description": "Free-form platform tag, e.g. windows, linux, android, macos, ios. Default `unknown`."
+    },
+    "deviceType": {
+      "type": "string",
+      "description": "Form factor, e.g. desktop, mobile. Default `desktop`."
+    },
+    "fingerprint": {
+      "type": "string",
+      "pattern": "^([0-9A-F]{64})?$",
+      "description": "Uppercase hex SHA-256 of the DER-encoded self-signed certificate (64 chars). Empty string in the plaintext profile (no certificate); non-empty in the secure profile, where it MUST equal the hash of the certificate presented in the TLS handshake. Default empty."
+    },
+    "port": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65535,
+      "description": "TCP port of the HTTP(S) API. Default 53318. 0 means this instance runs no API listener (a send-only client such as `ls send`); an announcement always carries a real port (see discovery-announce)."
+    },
+    "addrs": {
+      "type": "array",
+      "description": "Connection candidates for this device. Default empty.",
+      "items": {
+        "type": "object",
+        "required": ["ip"],
+        "properties": {
+          "ip": {
+            "type": "string",
+            "minLength": 1,
+            "description": "IPv4 or IPv6 literal."
+          },
+          "if": {
+            "type": "string",
+            "description": "Interface class: wifi, ethernet or unknown (default). Other values MUST be treated as unknown."
+          }
+        }
+      }
+    },
+    "caps": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Capability tokens. Defined: resume, tunnel (Increment 5), sas (the device serves POST /sessions/{sid}/sas, LSP/1.1 [I3]), pair (the device serves POST /pair, LSP/1.1 [I3]). A sender checks `sas`/`pair` before using the route; a LSP/1.0 peer answers 404. Unknown tokens are ignored."
+    }
+  },
+  "examples": [
+    {
+      "proto": "libreshare",
+      "v": "1.0",
+      "deviceId": "5b0f7d8e-3c1a-4f2b-9d6e-1a2b3c4d5e6f",
+      "alias": "Ravi-ThinkPad",
+      "platform": "windows",
+      "deviceType": "desktop",
+      "fingerprint": "FC074C4445C65D5C5208058734A816CFC5E77A51D5D9B596AD324828CEFA422E",
+      "port": 53318,
+      "addrs": [
+        { "ip": "192.168.1.23", "if": "wifi" },
+        { "ip": "10.0.0.5", "if": "ethernet" }
+      ],
+      "caps": ["resume", "tunnel", "sas"]
+    },
+    {
+      "proto": "libreshare",
+      "v": "1.0",
+      "deviceId": "0f6c2a9e-7b1d-4c3e-8a5f-9e8d7c6b5a43",
+      "alias": "loopback-receiver",
+      "platform": "linux",
+      "deviceType": "desktop",
+      "fingerprint": "",
+      "port": 53400,
+      "addrs": [{ "ip": "127.0.0.1", "if": "unknown" }],
+      "caps": ["resume"]
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "sender": {
+    "proto": "libreshare",
+    "v": "1.1",
+    "deviceId": "5b0f7d8e-3c1a-4f2b-9d6e-1a2b3c4d5e6f",
+    "alias": "Ravi-ThinkPad",
+    "platform": "windows",
+    "deviceType": "desktop",
+    "fingerprint": "FC074C4445C65D5C5208058734A816CFC5E77A51D5D9B596AD324828CEFA422E",
+    "port": 53318,
+    "addrs": [
+      {
+        "ip": "192.168.1.23",
+        "if": "wifi"
+      }
+    ],
+    "caps": [
+      "resume",
+      "sas",
+      "pair"
+    ]
+  },
+  "pin": null,
+  "chunkSize": 4194304,
+  "files": [
+    {
+      "fileId": "f1",
+      "fileName": "empty.txt",
+      "relativePath": null,
+      "size": 0,
+      "mime": "text/plain",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "chunkCount": 0,
+      "modified": null
+    }
+  ],
+  "totalSize": 0,
+  "tunnelOffer": null,
+  "sasCommit": "AyJBYH-evdz7GjlYd5a11PMSMVBvjq3M6wopSGeGpcQ"
+}

@@ -1,0 +1,14 @@
+include: package:lints/recommended.yaml
+analyzer:
+  exclude:
+    # Delivered proposals (patches, test copies, drafts) live under docs/ and cannot resolve their package imports there.
+    - docs/**
+  language:
+    strict-casts: true
+    strict-raw-types: true
+linter:
+  rules:
+    - avoid_print
+    - prefer_final_locals
+    - unawaited_futures
+    - always_declare_return_types

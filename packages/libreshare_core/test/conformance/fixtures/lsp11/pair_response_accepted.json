@@ -1,0 +1,26 @@
+{
+  "accepted": true,
+  "responder": {
+    "proto": "libreshare",
+    "v": "1.1",
+    "deviceId": "0f6c2a9e-7b1d-4c3e-8a5f-9e8d7c6b5a43",
+    "alias": "Ravi-Pixel",
+    "platform": "android",
+    "deviceType": "phone",
+    "fingerprint": "1F819647D8A757EEBF01D603D43E7608511EF99B48C0E58D5EC33F78B13C0314",
+    "port": 53318,
+    "addrs": [
+      {
+        "ip": "192.168.1.40",
+        "if": "wifi"
+      }
+    ],
+    "caps": [
+      "resume",
+      "sas",
+      "pair"
+    ]
+  },
+  "nonce": "ByZFZIOiweD_Hj1ce5q52A",
+  "mac": "DSxLaomox-YFJENigaC_3v0cO1p5mLfW9RQzUnGQr84"
+}

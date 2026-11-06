@@ -1,0 +1,9 @@
+.toolchain/
+.dart_tool/
+build/
+*.lspart
+pubspec.lock.bak
+.idea/
+.vscode/
+coverage/
+dist/

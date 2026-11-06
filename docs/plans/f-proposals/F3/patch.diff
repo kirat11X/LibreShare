@@ -1,0 +1,1105 @@
+--- /dev/null	2026-11-04 20:56:37.556836499 +0530
++++ docs/plans/f-proposals/F3/notification_service.dart	2026-11-06 11:15:28.206266689 +0530
+@@ -0,0 +1,252 @@
++/// Notification service abstraction and models for LibreShare (Card F3 / U2).
++///
++/// Provides a platform-agnostic interface for posting incoming transfer
++/// consent prompts, progress updates, completion alerts, and failure notices.
++library;
++
++import 'dart:async';
++
++/// Notification action types triggered by user interaction (e.g. action buttons).
++enum NotificationActionType { accept, reject }
++
++/// An action triggered by the user from a system notification.
++class NotificationAction {
++  const NotificationAction({required this.sessionId, required this.type});
++
++  const NotificationAction.accept(this.sessionId)
++    : type = NotificationActionType.accept;
++
++  const NotificationAction.reject(this.sessionId)
++    : type = NotificationActionType.reject;
++
++  final String sessionId;
++  final NotificationActionType type;
++
++  bool get isAccept => type == NotificationActionType.accept;
++  bool get isReject => type == NotificationActionType.reject;
++
++  @override
++  bool operator ==(Object other) =>
++      identical(this, other) ||
++      other is NotificationAction &&
++          runtimeType == other.runtimeType &&
++          sessionId == other.sessionId &&
++          type == other.type;
++
++  @override
++  int get hashCode => Object.hash(sessionId, type);
++
++  @override
++  String toString() => 'NotificationAction($sessionId, $type)';
++}
++
++/// Abstract contract for platform-specific notification services.
++abstract interface class NotificationService {
++  /// Shows an incoming transfer consent notification with Accept and Reject actions.
++  Future<void> showIncomingRequest({
++    required String sessionId,
++    required String peerName,
++    required int fileCount,
++    required int totalBytes,
++  });
++
++  /// Updates or shows an ongoing transfer progress notification.
++  Future<void> showProgress({
++    required String sessionId,
++    required double progress,
++    required String speed,
++  });
++
++  /// Shows a notification indicating that transfer of [fileCount] files completed.
++  Future<void> showCompleted({
++    required String sessionId,
++    required int fileCount,
++  });
++
++  /// Shows a failure notification explaining [reason] (sanitized).
++  Future<void> showFailed({required String sessionId, required String reason});
++
++  /// Dismisses or cancels active notifications associated with [sessionId].
++  Future<void> cancel(String sessionId);
++
++  /// Stream of notification actions (Accept, Reject) triggered by the user.
++  Stream<NotificationAction> get actions;
++
++  /// Entry point invoked when a platform notification action is tapped.
++  void onAction(NotificationAction action);
++}
++
++/// Safe no-op implementation of [NotificationService].
++class NoOpNotificationService implements NotificationService {
++  const NoOpNotificationService();
++
++  @override
++  Future<void> showIncomingRequest({
++    required String sessionId,
++    required String peerName,
++    required int fileCount,
++    required int totalBytes,
++  }) async {}
++
++  @override
++  Future<void> showProgress({
++    required String sessionId,
++    required double progress,
++    required String speed,
++  }) async {}
++
++  @override
++  Future<void> showCompleted({
++    required String sessionId,
++    required int fileCount,
++  }) async {}
++
++  @override
++  Future<void> showFailed({
++    required String sessionId,
++    required String reason,
++  }) async {}
++
++  @override
++  Future<void> cancel(String sessionId) async {}
++
++  @override
++  Stream<NotificationAction> get actions => const Stream.empty();
++
++  @override
++  void onAction(NotificationAction action) {}
++}
++
++/// Record of an incoming request call for test verification.
++class IncomingRequestCall {
++  const IncomingRequestCall({
++    required this.sessionId,
++    required this.peerName,
++    required this.fileCount,
++    required this.totalBytes,
++  });
++
++  final String sessionId;
++  final String peerName;
++  final int fileCount;
++  final int totalBytes;
++}
++
++/// Record of a progress call for test verification.
++class ProgressCall {
++  const ProgressCall({
++    required this.sessionId,
++    required this.progress,
++    required this.speed,
++  });
++
++  final String sessionId;
++  final double progress;
++  final String speed;
++}
++
++/// Record of a completed call for test verification.
++class CompletedCall {
++  const CompletedCall({required this.sessionId, required this.fileCount});
++
++  final String sessionId;
++  final int fileCount;
++}
++
++/// Record of a failed call for test verification.
++class FailedCall {
++  const FailedCall({required this.sessionId, required this.reason});
++
++  final String sessionId;
++  final String reason;
++}
++
++/// Fake implementation of [NotificationService] for unit and widget testing.
++class FakeNotificationService implements NotificationService {
++  FakeNotificationService();
++
++  final List<IncomingRequestCall> incomingRequests = [];
++  final List<ProgressCall> progressUpdates = [];
++  final List<CompletedCall> completedCalls = [];
++  final List<FailedCall> failedCalls = [];
++  final List<String> cancelledSessions = [];
++
++  final StreamController<NotificationAction> _actionController =
++      StreamController<NotificationAction>.broadcast();
++  void Function(NotificationAction action)? actionCallback;
++
++  @override
++  Stream<NotificationAction> get actions => _actionController.stream;
++
++  @override
++  void onAction(NotificationAction action) {
++    _actionController.add(action);
++    actionCallback?.call(action);
++  }
++
++  /// Convenience helper to trigger an action in tests.
++  void triggerAction(NotificationAction action) => onAction(action);
++
++  @override
++  Future<void> showIncomingRequest({
++    required String sessionId,
++    required String peerName,
++    required int fileCount,
++    required int totalBytes,
++  }) async {
++    incomingRequests.add(
++      IncomingRequestCall(
++        sessionId: sessionId,
++        peerName: peerName,
++        fileCount: fileCount,
++        totalBytes: totalBytes,
++      ),
++    );
++  }
++
++  @override
++  Future<void> showProgress({
++    required String sessionId,
++    required double progress,
++    required String speed,
++  }) async {
++    progressUpdates.add(
++      ProgressCall(sessionId: sessionId, progress: progress, speed: speed),
++    );
++  }
++
++  @override
++  Future<void> showCompleted({
++    required String sessionId,
++    required int fileCount,
++  }) async {
++    completedCalls.add(
++      CompletedCall(sessionId: sessionId, fileCount: fileCount),
++    );
++  }
++
++  @override
++  Future<void> showFailed({
++    required String sessionId,
++    required String reason,
++  }) async {
++    failedCalls.add(FailedCall(sessionId: sessionId, reason: reason));
++  }
++
++  @override
++  Future<void> cancel(String sessionId) async {
++    cancelledSessions.add(sessionId);
++  }
++
++  void clear() {
++    incomingRequests.clear();
++    progressUpdates.clear();
++    completedCalls.clear();
++    failedCalls.clear();
++    cancelledSessions.clear();
++  }
++
++  Future<void> dispose() async {
++    await _actionController.close();
++  }
++}
+--- /dev/null	2026-11-04 20:56:37.556836499 +0530
++++ docs/plans/f-proposals/F3/notification_provider.dart	2026-11-06 11:15:28.204266695 +0530
+@@ -0,0 +1,333 @@
++/// Riverpod bridge connecting engine events to platform notification services (Card F3 / U2).
++///
++/// Security invariants:
++/// 1. Exactly ONE notification posted per incoming session.
++/// 2. Action uses the SAME session id as the in-app dialog (the dialog remains single source of truth).
++/// 3. Never leak PIN, private keys, or full fingerprint into notification titles or bodies.
++/// 4. Truncate long file names cleanly.
++library;
++
++import 'dart:async';
++
++import 'package:flutter_riverpod/flutter_riverpod.dart';
++import 'package:libreshare_core/libreshare_core.dart';
++
++import '../platform/notifications/notification_service.dart';
++import '../services/format.dart';
++import 'engine_provider.dart';
++import 'platform_providers.dart';
++import 'transfers_provider.dart';
++
++/// Provider for the platform [NotificationService]. Defaults to [NoOpNotificationService].
++final notificationServiceProvider = Provider<NotificationService>((ref) {
++  return const NoOpNotificationService();
++});
++
++/// Configurable throttle interval for progress notifications (default: 500 ms).
++final notificationThrottleDurationProvider = Provider<Duration>((ref) {
++  return const Duration(milliseconds: 500);
++});
++
++/// Types of notifications tracked in state.
++enum NotificationType { incoming, progress, completed, failed }
++
++/// Metadata of an active or recent notification managed by [NotificationNotifier].
++class ActiveNotification {
++  const ActiveNotification({
++    required this.sessionId,
++    required this.type,
++    this.peerName,
++    this.fileCount,
++    this.totalBytes,
++    this.progress,
++    this.speed,
++    this.reason,
++  });
++
++  final String sessionId;
++  final NotificationType type;
++  final String? peerName;
++  final int? fileCount;
++  final int? totalBytes;
++  final double? progress;
++  final String? speed;
++  final String? reason;
++}
++
++/// State maintained by [NotificationNotifier].
++class NotificationState {
++  const NotificationState({this.activeNotifications = const {}});
++
++  final Map<String, ActiveNotification> activeNotifications;
++
++  NotificationState copyWith({
++    Map<String, ActiveNotification>? activeNotifications,
++  }) => NotificationState(
++    activeNotifications: activeNotifications ?? this.activeNotifications,
++  );
++}
++
++/// Truncate long file names or titles cleanly, preserving the file extension when possible.
++String truncateFileName(String name, {int maxLength = 32}) {
++  if (name.length <= maxLength) return name;
++  final dotIndex = name.lastIndexOf('.');
++  if (dotIndex > 0 && dotIndex < name.length - 1) {
++    final ext = name.substring(dotIndex);
++    if (ext.length < maxLength ~/ 2) {
++      final keepBase = maxLength - ext.length - 1; // 1 for '…'
++      if (keepBase > 0) {
++        return '${name.substring(0, keepBase)}…$ext';
++      }
++    }
++  }
++  return '${name.substring(0, maxLength - 1)}…';
++}
++
++/// Scrub text of sensitive patterns: full 64-character SHA-256 fingerprints,
++/// private keys, pairing secrets, and PIN numbers.
++String sanitizeNotificationText(String text) {
++  var sanitized = text;
++  // Never leak full 64-hex fingerprints
++  sanitized = sanitized.replaceAll(
++    RegExp(r'\b[0-9a-fA-F]{64}\b'),
++    '[fingerprint]',
++  );
++  // Never leak PEM / private key blocks
++  sanitized = sanitized.replaceAll(
++    RegExp(r'-----BEGIN[ A-Z_-]+KEY-----[\s\S]*?-----END[ A-Z_-]+KEY-----'),
++    '[redacted key]',
++  );
++  // Never leak pairing secrets (s=...)
++  sanitized = sanitized.replaceAll(
++    RegExp(r's=[a-zA-Z0-9_\-]+'),
++    's=[redacted]',
++  );
++  // Never leak 6-digit PIN numbers
++  sanitized = sanitized.replaceAll(
++    RegExp(r'(?<=\bpin[:=\s]*)\b\d{6}\b', caseSensitive: false),
++    '[pin]',
++  );
++  return sanitized;
++}
++
++/// Riverpod Notifier coordinating engine transfer events and notification dispatch.
++class NotificationNotifier extends Notifier<NotificationState> {
++  final Set<String> _notifiedIncomingSessions = <String>{};
++  final Map<String, DateTime> _lastProgressTimestamp = <String, DateTime>{};
++  final Map<String, int> _sessionFileCount = <String, int>{};
++  final Map<String, int> _lastBytesDone = <String, int>{};
++
++  NotificationService get _service => ref.read(notificationServiceProvider);
++  Clock get _clock => ref.read(clockProvider);
++  Duration get _throttleDuration =>
++      ref.watch(notificationThrottleDurationProvider);
++
++  @override
++  NotificationState build() {
++    final service = ref.watch(notificationServiceProvider);
++    final engine = ref.watch(engineOrNullProvider);
++
++    final actionSub = service.actions.listen(handleAction);
++    ref.onDispose(() => unawaited(actionSub.cancel()));
++
++    if (engine != null) {
++      final engineSub = engine.events.listen(_onEngineEvent);
++      ref.onDispose(() => unawaited(engineSub.cancel()));
++    }
++
++    return const NotificationState();
++  }
++
++  /// Dispatches an action (Accept or Reject) using the EXACT same session ID as the dialog.
++  Future<void> handleAction(NotificationAction action) async {
++    final transfers = ref.read(transfersProvider.notifier);
++    switch (action.type) {
++      case NotificationActionType.accept:
++        await transfers.acceptIncoming(action.sessionId);
++        await cancel(action.sessionId);
++      case NotificationActionType.reject:
++        await transfers.rejectIncoming(action.sessionId);
++        await cancel(action.sessionId);
++    }
++  }
++
++  /// Cancels notifications associated with [sessionId].
++  Future<void> cancel(String sessionId) async {
++    await _service.cancel(sessionId);
++    if (!ref.mounted) return;
++    final next = Map<String, ActiveNotification>.from(
++      state.activeNotifications,
++    );
++    next.remove(sessionId);
++    state = state.copyWith(activeNotifications: next);
++  }
++
++  void _onEngineEvent(LsEvent e) {
++    switch (e) {
++      case SessionCreated(:final sessionId, :final outgoing):
++        if (!outgoing) {
++          unawaited(_onIncomingSession(sessionId));
++        }
++      case FileProgress(:final sessionId, :final bytesDone, :final bytesTotal):
++        unawaited(_onFileProgress(sessionId, bytesDone, bytesTotal));
++      case FileSaved():
++        break;
++      case SessionFinished(:final sessionId, :final success, :final reason):
++        unawaited(_onSessionFinished(sessionId, success, reason));
++      case SasReady() ||
++          PeerKeyChanged() ||
++          PinBruteForceSuspected() ||
++          ContactChanged() ||
++          BlockSuggested():
++        break;
++    }
++  }
++
++  Future<void> _onIncomingSession(String sessionId) async {
++    // Security invariant: Exactly ONE notification posted per incoming session.
++    if (_notifiedIncomingSessions.contains(sessionId)) return;
++    _notifiedIncomingSessions.add(sessionId);
++
++    final engine = ref.read(engineOrNullProvider);
++    String peerName = 'Unknown device';
++    int fileCount = 1;
++    int totalBytes = 0;
++
++    if (engine != null) {
++      final req = engine.receiver.requestFor(sessionId);
++      if (req != null) {
++        final alias = req.sender.alias.trim();
++        if (alias.isNotEmpty) {
++          peerName = sanitizeNotificationText(
++            truncateFileName(alias, maxLength: 40),
++          );
++        }
++        fileCount = req.files.length;
++        totalBytes = req.totalSize;
++        _sessionFileCount[sessionId] = fileCount;
++      }
++    }
++
++    await _service.showIncomingRequest(
++      sessionId: sessionId,
++      peerName: peerName,
++      fileCount: fileCount,
++      totalBytes: totalBytes,
++    );
++
++    if (!ref.mounted) return;
++    final next = Map<String, ActiveNotification>.from(
++      state.activeNotifications,
++    );
++    next[sessionId] = ActiveNotification(
++      sessionId: sessionId,
++      type: NotificationType.incoming,
++      peerName: peerName,
++      fileCount: fileCount,
++      totalBytes: totalBytes,
++    );
++    state = state.copyWith(activeNotifications: next);
++  }
++
++  Future<void> _onFileProgress(
++    String sessionId,
++    int bytesDone,
++    int bytesTotal,
++  ) async {
++    final now = _clock.now();
++    final lastTime = _lastProgressTimestamp[sessionId];
++    final isFirst = lastTime == null;
++    final isComplete = bytesTotal > 0 && bytesDone >= bytesTotal;
++    final elapsed = isFirst ? Duration.zero : now.difference(lastTime);
++
++    // Throttle progress notifications
++    if (!isFirst && !isComplete && elapsed < _throttleDuration) {
++      return;
++    }
++    _lastProgressTimestamp[sessionId] = now;
++
++    final fraction = bytesTotal <= 0
++        ? 0.0
++        : (bytesDone / bytesTotal).clamp(0.0, 1.0);
++
++    // Speed calculation
++    double speedBytesPerSec = 0.0;
++    final lastBytes = _lastBytesDone[sessionId] ?? 0;
++    if (!isFirst && elapsed.inMilliseconds > 0) {
++      final deltaBytes = bytesDone - lastBytes;
++      if (deltaBytes > 0) {
++        speedBytesPerSec = (deltaBytes / elapsed.inMilliseconds) * 1000.0;
++      }
++    }
++    _lastBytesDone[sessionId] = bytesDone;
++
++    final speedText = formatSpeed(speedBytesPerSec);
++
++    await _service.showProgress(
++      sessionId: sessionId,
++      progress: fraction,
++      speed: speedText,
++    );
++
++    if (!ref.mounted) return;
++    final next = Map<String, ActiveNotification>.from(
++      state.activeNotifications,
++    );
++    next[sessionId] = ActiveNotification(
++      sessionId: sessionId,
++      type: NotificationType.progress,
++      progress: fraction,
++      speed: speedText,
++    );
++    state = state.copyWith(activeNotifications: next);
++  }
++
++  Future<void> _onSessionFinished(
++    String sessionId,
++    bool success,
++    String? reason,
++  ) async {
++    _lastProgressTimestamp.remove(sessionId);
++    _lastBytesDone.remove(sessionId);
++
++    if (success) {
++      final fileCount = _sessionFileCount.remove(sessionId) ?? 1;
++      await _service.showCompleted(sessionId: sessionId, fileCount: fileCount);
++      if (!ref.mounted) return;
++      final next = Map<String, ActiveNotification>.from(
++        state.activeNotifications,
++      );
++      next[sessionId] = ActiveNotification(
++        sessionId: sessionId,
++        type: NotificationType.completed,
++        fileCount: fileCount,
++      );
++      state = state.copyWith(activeNotifications: next);
++    } else {
++      _sessionFileCount.remove(sessionId);
++      if (reason == 'rejected' || reason == 'cancelled') {
++        await cancel(sessionId);
++      } else {
++        final safeReason = sanitizeNotificationText(
++          reason ?? 'Transfer failed',
++        );
++        await _service.showFailed(sessionId: sessionId, reason: safeReason);
++        if (!ref.mounted) return;
++        final next = Map<String, ActiveNotification>.from(
++          state.activeNotifications,
++        );
++        next[sessionId] = ActiveNotification(
++          sessionId: sessionId,
++          type: NotificationType.failed,
++          reason: safeReason,
++        );
++        state = state.copyWith(activeNotifications: next);
++      }
++    }
++  }
++}
++
++final notificationProvider =
++    NotifierProvider<NotificationNotifier, NotificationState>(
++      NotificationNotifier.new,
++    );
+--- /dev/null	2026-11-04 20:56:37.556836499 +0530
++++ docs/plans/f-proposals/F3/notifications_test.dart	2026-11-06 11:21:25.598210996 +0530
+@@ -0,0 +1,511 @@
++import 'dart:async';
++import 'dart:io';
++
++import 'package:flutter_riverpod/flutter_riverpod.dart';
++import 'package:flutter_test/flutter_test.dart';
++import 'package:libreshare_app/platform/notifications/notification_service.dart';
++import 'package:libreshare_app/providers/engine_provider.dart';
++import 'package:libreshare_app/providers/notification_provider.dart';
++import 'package:libreshare_app/providers/platform_providers.dart';
++import 'package:libreshare_app/providers/transfers_provider.dart';
++import 'package:libreshare_core/libreshare_core.dart';
++
++/// Test clock that allows explicit time manipulation.
++class TestClock implements Clock {
++  TestClock([DateTime? initial]) : _now = initial ?? DateTime(2026, 11, 6, 10);
++  DateTime _now;
++
++  @override
++  DateTime now() => _now;
++
++  void advance(Duration duration) {
++    _now = _now.add(duration);
++  }
++}
++
++/// Fake receiver extending FileReceiver for testing engine receiver seam.
++class FakeReceiver extends FileReceiver {
++  FakeReceiver()
++    : super(
++        self: const DeviceInfo(
++          deviceId: 'self-id',
++          alias: 'Test Receiver',
++          platform: 'linux',
++        ),
++        downloadDir: Directory.systemTemp,
++      );
++
++  final Map<String, SessionRequest> testRequests = {};
++  final List<String> acceptedSessions = [];
++  final List<String> rejectedSessions = [];
++  final List<String> cancelledSessions = [];
++
++  @override
++  SessionRequest? requestFor(String sessionId) => testRequests[sessionId];
++
++  @override
++  Future<SessionStatus> accept(String sessionId) async {
++    acceptedSessions.add(sessionId);
++    return SessionStatus(
++      sessionId: sessionId,
++      status: TransferStatus.inProgress,
++    );
++  }
++
++  @override
++  Future<void> reject(String sessionId) async {
++    rejectedSessions.add(sessionId);
++  }
++
++  @override
++  Future<void> cancel(String sessionId) async {
++    cancelledSessions.add(sessionId);
++  }
++}
++
++/// Fake LibreShareEngine for testing engine events and receiver seam.
++class TestEngine implements LibreShareEngine {
++  TestEngine() : receiver = FakeReceiver();
++
++  @override
++  final FakeReceiver receiver;
++
++  final StreamController<LsEvent> _eventController =
++      StreamController<LsEvent>.broadcast();
++
++  @override
++  Stream<LsEvent> get events => _eventController.stream;
++
++  void emitEvent(LsEvent event) {
++    _eventController.add(event);
++  }
++
++  @override
++  Duration get permissionTimeout => const Duration(seconds: 120);
++
++  @override
++  List<DiscoveredDevice> get currentDevices => const [];
++
++  @override
++  DeviceInfo get self => const DeviceInfo(
++    deviceId: 'self-device-id',
++    alias: 'This Device',
++    platform: 'linux',
++  );
++
++  @override
++  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
++
++  @override
++  Future<void> dispose({bool force = false}) async {
++    await _eventController.close();
++  }
++}
++
++void main() {
++  group('NotificationService interface and NoOp implementation', () {
++    test('NoOpNotificationService handles all methods without error', () async {
++      const service = NoOpNotificationService();
++
++      await service.showIncomingRequest(
++        sessionId: 's1',
++        peerName: 'Pixel',
++        fileCount: 2,
++        totalBytes: 4096,
++      );
++      await service.showProgress(
++        sessionId: 's1',
++        progress: 0.5,
++        speed: '1.2 MB/s',
++      );
++      await service.showCompleted(sessionId: 's1', fileCount: 2);
++      await service.showFailed(sessionId: 's1', reason: 'Connection timeout');
++      await service.cancel('s1');
++
++      service.onAction(const NotificationAction.accept('s1'));
++
++      final actions = await service.actions.toList();
++      expect(actions, isEmpty);
++    });
++
++    test('NotificationAction equality and properties', () {
++      const a1 = NotificationAction.accept('session-1');
++      const a2 = NotificationAction(
++        sessionId: 'session-1',
++        type: NotificationActionType.accept,
++      );
++      const r1 = NotificationAction.reject('session-1');
++      const r2 = NotificationAction.reject('session-2');
++
++      expect(a1, equals(a2));
++      expect(a1.isAccept, isTrue);
++      expect(a1.isReject, isFalse);
++      expect(r1.isReject, isTrue);
++      expect(r1.isAccept, isFalse);
++      expect(a1, isNot(equals(r1)));
++      expect(r1, isNot(equals(r2)));
++      expect(a1.hashCode, equals(a2.hashCode));
++      expect(a1.toString(), contains('session-1'));
++    });
++  });
++
++  group('Clean file name truncation and sanitization', () {
++    test('truncateFileName handles short and long names properly', () {
++      expect(truncateFileName('report.pdf', maxLength: 32), 'report.pdf');
++      expect(
++        truncateFileName(
++          'very_long_document_name_exceeding_budget_by_far.pdf',
++          maxLength: 24,
++        ),
++        'very_long_document_….pdf',
++      );
++      expect(
++        truncateFileName(
++          'name_without_extension_that_is_quite_long',
++          maxLength: 16,
++        ),
++        'name_without_ex…',
++      );
++      expect(truncateFileName('exact10chs', maxLength: 10), 'exact10chs');
++      expect(truncateFileName('.hidden', maxLength: 10), '.hidden');
++    });
++
++    test('sanitizeNotificationText scrubs sensitive secrets and PINS', () {
++      // 64-hex fingerprint
++      const fullFingerprint =
++          '0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF';
++      expect(
++        sanitizeNotificationText('Failed for peer $fullFingerprint'),
++        'Failed for peer [fingerprint]',
++      );
++
++      // Private key blocks
++      const privKey =
++          '-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA0...\n-----END RSA PRIVATE KEY-----';
++      expect(sanitizeNotificationText('Key: $privKey'), 'Key: [redacted key]');
++
++      // Pairing secrets
++      expect(
++        sanitizeNotificationText('Pair link s=secret_code_123456789'),
++        'Pair link s=[redacted]',
++      );
++
++      // 6-digit PIN patterns
++      expect(
++        sanitizeNotificationText('Auth failed: pin: 123456'),
++        'Auth failed: pin: [pin]',
++      );
++      expect(
++        sanitizeNotificationText('pin=987654 rejected'),
++        'pin=[pin] rejected',
++      );
++    });
++  });
++
++  group('NotificationProvider and Riverpod mapping', () {
++    late FakeNotificationService fakeService;
++    late TestEngine engine;
++    late TestClock clock;
++    late ProviderContainer container;
++
++    setUp(() {
++      fakeService = FakeNotificationService();
++      engine = TestEngine();
++      clock = TestClock();
++
++      container = ProviderContainer(
++        overrides: [
++          notificationServiceProvider.overrideWithValue(fakeService),
++          notificationThrottleDurationProvider.overrideWithValue(
++            const Duration(milliseconds: 500),
++          ),
++          clockProvider.overrideWithValue(clock),
++          engineOrNullProvider.overrideWithValue(engine),
++        ],
++      );
++
++      // Initialize providers to subscribe to engine events
++      container.read(transfersProvider);
++      container.read(notificationProvider);
++    });
++
++    tearDown(() {
++      container.dispose();
++      engine.dispose();
++      fakeService.dispose();
++    });
++
++    test(
++      'incoming session notification is posted with correct details',
++      () async {
++        const sessionId = 'incoming-session-001';
++        engine.receiver.testRequests[sessionId] = const SessionRequest(
++          sender: DeviceInfo(
++            deviceId: 'peer-device-1',
++            alias: 'Alice MacBook',
++            platform: 'macos',
++          ),
++          files: [
++            FileItem(
++              fileId: 'f1',
++              fileName: 'photo.jpg',
++              size: 1024,
++              chunkCount: 1,
++            ),
++            FileItem(
++              fileId: 'f2',
++              fileName: 'notes.txt',
++              size: 2048,
++              chunkCount: 1,
++            ),
++          ],
++          totalSize: 3072,
++        );
++
++        engine.emitEvent(const SessionCreated(sessionId, outgoing: false));
++        await Future<void>.delayed(Duration.zero);
++
++        expect(fakeService.incomingRequests.length, 1);
++        final call = fakeService.incomingRequests.single;
++        expect(call.sessionId, sessionId);
++        expect(call.peerName, 'Alice MacBook');
++        expect(call.fileCount, 2);
++        expect(call.totalBytes, 3072);
++
++        final state = container.read(notificationProvider);
++        expect(state.activeNotifications.containsKey(sessionId), isTrue);
++        expect(
++          state.activeNotifications[sessionId]!.type,
++          NotificationType.incoming,
++        );
++      },
++    );
++
++    test('deduplication invariant: exactly ONE notification posted per incoming session', () async {
++      const sessionId = 'incoming-session-dedup';
++      engine.receiver.testRequests[sessionId] = const SessionRequest(
++        sender: DeviceInfo(
++          deviceId: 'peer-device-2',
++          alias: 'Bob Phone',
++          platform: 'android',
++        ),
++        files: [
++          FileItem(
++            fileId: 'f1',
++            fileName: 'doc.pdf',
++            size: 5000,
++            chunkCount: 1,
++          ),
++        ],
++        totalSize: 5000,
++      );
++
++      // Fire SessionCreated multiple times for the same session ID
++      engine.emitEvent(const SessionCreated(sessionId, outgoing: false));
++      await Future<void>.delayed(Duration.zero);
++      engine.emitEvent(const SessionCreated(sessionId, outgoing: false));
++      await Future<void>.delayed(Duration.zero);
++      engine.emitEvent(const SessionCreated(sessionId, outgoing: false));
++      await Future<void>.delayed(Duration.zero);
++
++      expect(fakeService.incomingRequests.length, 1);
++    });
++
++    test(
++      'accept action triggers receive session accept and cancels notification',
++      () async {
++        const sessionId = 'incoming-session-accept';
++        engine.receiver.testRequests[sessionId] = const SessionRequest(
++          sender: DeviceInfo(
++            deviceId: 'peer-device-3',
++            alias: 'Charlie Linux',
++            platform: 'linux',
++          ),
++          files: [
++            FileItem(
++              fileId: 'f1',
++              fileName: 'archive.tar.gz',
++              size: 10000,
++              chunkCount: 1,
++            ),
++          ],
++          totalSize: 10000,
++        );
++
++        // Post incoming notification
++        engine.emitEvent(const SessionCreated(sessionId, outgoing: false));
++        await Future<void>.delayed(Duration.zero);
++        expect(fakeService.incomingRequests.length, 1);
++
++        // Trigger accept notification action
++        fakeService.triggerAction(const NotificationAction.accept(sessionId));
++        await Future<void>.delayed(Duration.zero);
++
++        // Receiver accept was called with the SAME session id
++        expect(engine.receiver.acceptedSessions, contains(sessionId));
++        // Incoming notification was cancelled
++        expect(fakeService.cancelledSessions, contains(sessionId));
++      },
++    );
++
++    test(
++      'reject action triggers receive session reject and cancels notification',
++      () async {
++        const sessionId = 'incoming-session-reject';
++        engine.receiver.testRequests[sessionId] = const SessionRequest(
++          sender: DeviceInfo(
++            deviceId: 'peer-device-4',
++            alias: 'Dana Windows',
++            platform: 'windows',
++          ),
++          files: [
++            FileItem(
++              fileId: 'f1',
++              fileName: 'video.mp4',
++              size: 80000,
++              chunkCount: 1,
++            ),
++          ],
++          totalSize: 80000,
++        );
++
++        // Post incoming notification
++        engine.emitEvent(const SessionCreated(sessionId, outgoing: false));
++        await Future<void>.delayed(Duration.zero);
++        expect(fakeService.incomingRequests.length, 1);
++
++        // Trigger reject notification action
++        fakeService.triggerAction(const NotificationAction.reject(sessionId));
++        await Future<void>.delayed(Duration.zero);
++
++        // Receiver reject was called with the SAME session id
++        expect(engine.receiver.rejectedSessions, contains(sessionId));
++        // Incoming notification was cancelled
++        expect(fakeService.cancelledSessions, contains(sessionId));
++      },
++    );
++
++    test('progress updates are throttled within throttle interval', () async {
++      const sessionId = 'session-progress-throttle';
++
++      // First progress event immediately posts notification
++      engine.emitEvent(const FileProgress(sessionId, 'f1', 100, 1000));
++      await Future<void>.delayed(Duration.zero);
++      expect(fakeService.progressUpdates.length, 1);
++      expect(fakeService.progressUpdates.first.progress, 0.1);
++
++      // Rapid progress events within 500 ms window should be throttled
++      clock.advance(const Duration(milliseconds: 100));
++      engine.emitEvent(const FileProgress(sessionId, 'f1', 200, 1000));
++      clock.advance(const Duration(milliseconds: 100));
++      engine.emitEvent(const FileProgress(sessionId, 'f1', 300, 1000));
++      clock.advance(const Duration(milliseconds: 100));
++      engine.emitEvent(const FileProgress(sessionId, 'f1', 400, 1000));
++      await Future<void>.delayed(Duration.zero);
++
++      // Still only 1 progress update posted due to throttling!
++      expect(fakeService.progressUpdates.length, 1);
++
++      // Advance clock past the 500 ms throttle interval
++      clock.advance(const Duration(milliseconds: 300)); // Total 600 ms elapsed
++      engine.emitEvent(const FileProgress(sessionId, 'f1', 600, 1000));
++      await Future<void>.delayed(Duration.zero);
++
++      // Second update posted!
++      expect(fakeService.progressUpdates.length, 2);
++      expect(fakeService.progressUpdates.last.progress, 0.6);
++
++      // 100% completion is posted without throttling delay
++      clock.advance(const Duration(milliseconds: 50));
++      engine.emitEvent(const FileProgress(sessionId, 'f1', 1000, 1000));
++      await Future<void>.delayed(Duration.zero);
++
++      expect(fakeService.progressUpdates.length, 3);
++      expect(fakeService.progressUpdates.last.progress, 1.0);
++    });
++
++    test('assert no PIN or secret in notification payload', () async {
++      const sessionId = 'session-secret-check';
++      const sensitivePin = '849201';
++      const fullFingerprint =
++          'ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789';
++
++      engine.receiver.testRequests[sessionId] = const SessionRequest(
++        sender: DeviceInfo(
++          deviceId: 'peer-sec',
++          alias: 'Secure Device',
++          platform: 'linux',
++          fingerprint: fullFingerprint,
++        ),
++        pin: sensitivePin,
++        files: [
++          FileItem(
++            fileId: 'f1',
++            fileName: 'secret_file.pdf',
++            size: 1000,
++            chunkCount: 1,
++          ),
++        ],
++        totalSize: 1000,
++      );
++
++      engine.emitEvent(const SessionCreated(sessionId, outgoing: false));
++      await Future<void>.delayed(Duration.zero);
++
++      expect(fakeService.incomingRequests.length, 1);
++      final incoming = fakeService.incomingRequests.single;
++
++      // Assert PIN is NOT in any notification payload field
++      expect(incoming.peerName.contains(sensitivePin), isFalse);
++      expect(incoming.sessionId.contains(sensitivePin), isFalse);
++      expect(incoming.peerName.contains(fullFingerprint), isFalse);
++
++      // Check failure notification sanitization
++      engine.emitEvent(
++        const SessionFinished(
++          sessionId,
++          success: false,
++          reason: 'Failed with pin: 849201 and cert ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789',
++        ),
++      );
++      await Future<void>.delayed(Duration.zero);
++
++      expect(fakeService.failedCalls.length, 1);
++      final failure = fakeService.failedCalls.single;
++      expect(failure.reason.contains(sensitivePin), isFalse);
++      expect(failure.reason.contains(fullFingerprint), isFalse);
++      expect(failure.reason, contains('[pin]'));
++      expect(failure.reason, contains('[fingerprint]'));
++    });
++
++    test('session completed triggers showCompleted with file count', () async {
++      const sessionId = 'session-completed-check';
++      engine.receiver.testRequests[sessionId] = const SessionRequest(
++        sender: DeviceInfo(
++          deviceId: 'peer-comp',
++          alias: 'Sender Device',
++          platform: 'android',
++        ),
++        files: [
++          FileItem(fileId: 'f1', fileName: 'f1.txt', size: 100, chunkCount: 1),
++          FileItem(fileId: 'f2', fileName: 'f2.txt', size: 200, chunkCount: 1),
++          FileItem(fileId: 'f3', fileName: 'f3.txt', size: 300, chunkCount: 1),
++        ],
++        totalSize: 600,
++      );
++
++      // Establish session
++      engine.emitEvent(const SessionCreated(sessionId, outgoing: false));
++      await Future<void>.delayed(Duration.zero);
++
++      // Complete session
++      engine.emitEvent(const SessionFinished(sessionId, success: true));
++      await Future<void>.delayed(Duration.zero);
++
++      expect(fakeService.completedCalls.length, 1);
++      final completed = fakeService.completedCalls.single;
++      expect(completed.sessionId, sessionId);
++      expect(completed.fileCount, 3);
++    });
++  });
++}

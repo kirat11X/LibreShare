@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://libreshare.example/protocol/lsp1/schemas/tunnel-offer.schema.json",
+  "title": "TunnelOffer",
+  "description": "Internet fallback offer carried in SessionRequest.tunnelOffer (Increment 5; null/absent in Increment 1). It travels only inside the mutually authenticated channel so the tunnel provider never learns `keyB64`. Mirrors TunnelOffer in packages/libreshare_core/lib/src/model/session_models.dart. Unknown members MUST be ignored.",
+  "type": "object",
+  "required": ["provider", "url", "keyB64", "expiresAt"],
+  "properties": {
+    "provider": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Tunnel provider tag, e.g. cloudflare-quick or zrok."
+    },
+    "url": {
+      "type": "string",
+      "pattern": "^https://",
+      "description": "Public tunnel base URL including the /t/<token> path (token: 128-bit random, base64url)."
+    },
+    "keyB64": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43}=?$",
+      "description": "Per-session AES-256-GCM key: 32 bytes, base64url."
+    },
+    "expiresAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Absolute expiry, ISO-8601 UTC."
+    }
+  },
+  "examples": [
+    {
+      "provider": "cloudflare-quick",
+      "url": "https://x.trycloudflare.com/t/ABkLScJAffjjp9vnJ60X5w",
+      "keyB64": "9XGqai5pBy8t4HsHIxcu68X4_e4fOg7MYyKYMHc7WPA",
+      "expiresAt": "2026-11-02T12:30:00Z"
+    }
+  ]
+}

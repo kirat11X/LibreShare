@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "KEY_CHANGED",
+    "message": "certificate differs from the pinned one for this device",
+    "retryable": false
+  }
+}

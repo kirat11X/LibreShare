@@ -1,0 +1,77 @@
+# LibreShare headless node for Docker Desktop (Windows, WSL2 backend, LINUX containers; also what
+# macOS Docker Desktop does). Windows *native* containers cannot run this Linux binary.
+#
+#   deploy\install.ps1                      # recommended: checks, writes .env, builds, starts, prints the link
+#   docker compose -f deploy/docker/compose.windows.yaml --env-file deploy/docker/.env up -d --build
+#
+# NO host networking: Docker Desktop runs containers inside a VM behind NAT, so `network_mode: host`
+# would only reach the VM, not your LAN. Instead the API port is PUBLISHED (TCP and UDP).
+# HONEST CONSEQUENCE: LAN multicast discovery (224.0.0.168) and mDNS do NOT cross that NAT. Other
+# devices will not see this node in their list. They must connect by link or IP:port, and the
+# container only knows its internal IP (172.x), so the link has to carry the Windows host's LAN IP:
+# install.ps1 prints it (LS_HOST_IP in .env is only informational for you, the container ignores it).
+# The host port equals the container port on purpose: the node advertises LS_PORT in /info.
+#
+# PROTOTYPE WARNING: plain HTTP, no TLS/PIN yet, auto-accept on. Trusted private networks only.
+name: libreshare
+
+services:
+  libreshare:
+    image: libreshare/node:local
+    pull_policy: never
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+      args:
+        DART_VERSION: "3.13.7"
+    labels:
+      dev.libreshare.install: "1"
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 10s
+
+    # 10001 = the image's own user. Docker Desktop bind mounts accept writes from any uid, so there
+    # is nothing to change on Windows/macOS; the knob exists to run this file on a Linux box.
+    user: "${LS_UID:-10001}:${LS_GID:-10001}"
+
+    ports:
+      - "${LS_PORT:-53318}:${LS_PORT:-53318}/tcp"
+      - "${LS_PORT:-53318}:${LS_PORT:-53318}/udp"
+
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    cpus: 1.5
+    pids_limit: 256
+
+    environment:
+      LS_ALIAS: "${LS_ALIAS:-}"
+      LS_PORT: "${LS_PORT:-53318}"
+      LS_AUTO_ACCEPT: "${LS_AUTO_ACCEPT:-1}"
+      LS_VISIBILITY: "${LS_VISIBILITY:-everyone}"
+      LS_EXTRA_ARGS: "${LS_EXTRA_ARGS:-}"
+
+    volumes:
+      # Received files: a normal Windows folder (install.ps1 writes LS_DATA_DIR, e.g.
+      # C:/Users/you/LibreShare/received). Default ./received next to this file.
+      - type: bind
+        source: "${LS_DATA_DIR:-./received}"
+        target: /data
+        bind:
+          create_host_path: true
+      - type: volume
+        source: config
+        target: /config
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  config:

@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "CHUNK_HASH_MISMATCH",
+    "message": "chunk 7 sha256 mismatch",
+    "retryable": true
+  }
+}

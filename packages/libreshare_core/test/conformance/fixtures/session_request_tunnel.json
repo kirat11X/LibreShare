@@ -1,0 +1,35 @@
+{
+  "sender": {
+    "proto": "libreshare",
+    "v": "1.0",
+    "deviceId": "5b0f7d8e-3c1a-4f2b-9d6e-1a2b3c4d5e6f",
+    "alias": "Ravi-ThinkPad",
+    "platform": "windows",
+    "deviceType": "desktop",
+    "fingerprint": "FC074C4445C65D5C5208058734A816CFC5E77A51D5D9B596AD324828CEFA422E",
+    "port": 53318,
+    "addrs": [{ "ip": "192.168.1.23", "if": "wifi" }],
+    "caps": ["resume", "tunnel", "sas"]
+  },
+  "pin": "123456",
+  "chunkSize": 4194304,
+  "files": [
+    {
+      "fileId": "f1",
+      "fileName": "report.pdf",
+      "relativePath": null,
+      "size": 5242880000,
+      "mime": "application/pdf",
+      "sha256": "938ed3faacee1cb99788419b4bbbe70690b67a0494621834c0e92424623645b6",
+      "chunkCount": 1250,
+      "modified": "2026-10-30T10:00:00.000Z"
+    }
+  ],
+  "totalSize": 5242880000,
+  "tunnelOffer": {
+    "provider": "cloudflare-quick",
+    "url": "https://x.trycloudflare.com/t/ABkLScJAffjjp9vnJ60X5w",
+    "keyB64": "9XGqai5pBy8t4HsHIxcu68X4_e4fOg7MYyKYMHc7WPA",
+    "expiresAt": "2026-11-02T12:30:00.000Z"
+  }
+}

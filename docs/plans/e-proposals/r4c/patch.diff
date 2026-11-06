@@ -1,0 +1,93 @@
+diff -ruN packages/libreshare_core/lib/src/engine/libreshare_engine.dart .toolchain/scratch/e5-r4c/clone/packages/libreshare_core/lib/src/engine/libreshare_engine.dart
+--- a/packages/libreshare_core/lib/src/engine/libreshare_engine.dart	2026-11-05 19:51:04.210821302 +0530
++++ b/packages/libreshare_core/lib/src/engine/libreshare_engine.dart	2026-11-06 12:13:16.087901863 +0530
+@@ -198,6 +198,7 @@
+   StreamSubscription<DiscoveryEvent>? _certWatch;
+   StreamSubscription<void>? _trustWatch;
+   final Set<String> _greeted = {};
++  final Map<String, Timer> _greetRetry = {};
+   final Set<String> _learning = {};
+   Future<void> _mdnsTail = Future<void>.value();
+   int? _mdnsPort;
+@@ -524,6 +525,10 @@
+     await _trustWatch?.cancel();
+     _trustWatch = null;
+     _greeted.clear();
++    for (final t in _greetRetry.values) {
++      t.cancel();
++    }
++    _greetRetry.clear();
+     _registry.stop();
+     await _stopMdns();
+     final multicast = _multicast;
+@@ -1058,13 +1063,69 @@
+       final t = trust.classifyFingerprint(fp).trust;
+       final contact = t == PeerTrust.known || t == PeerTrust.trusted;
+       if (contact && _greeted.add(fp)) {
+-        unawaited(_registrar.call(d.info, d.address));
++        unawaited(_greet(fp, 0));
+       } else if (!contact) {
+         _greeted.remove(fp);
++        _greetRetry.remove(fp)?.cancel();
+       }
+     }
+   }
+ 
++  /// Back-off between greeting retries (about 40 s in 16 tries; the first
++  /// eight cover 4 s at 0.5 s steps, because a contact usually pins us within
++  /// seconds).
++  static const List<Duration> _greetBackoff = [
++    Duration(milliseconds: 500),
++    Duration(milliseconds: 500),
++    Duration(milliseconds: 500),
++    Duration(milliseconds: 500),
++    Duration(milliseconds: 500),
++    Duration(milliseconds: 500),
++    Duration(milliseconds: 500),
++    Duration(milliseconds: 500),
++    Duration(seconds: 1),
++    Duration(seconds: 1),
++    Duration(seconds: 2),
++    Duration(seconds: 2),
++    Duration(seconds: 5),
++    Duration(seconds: 5),
++    Duration(seconds: 10),
++    Duration(seconds: 10),
++  ];
++
++  /// One greeting attempt ([attempt] 0 is the first). A refused or failed
++  /// `POST /register` (the contact may not have pinned us yet) is retried
++  /// with back-off while it is still a listed contact and we are running.
++  Future<void> _greet(String fp, int attempt) async {
++    _greetRetry.remove(fp)?.cancel();
++    if (!_started || !_isContactsOnly() || !_greeted.contains(fp)) return;
++    DiscoveredDevice? d;
++    for (final x in _registry.current) {
++      if (x.info.fingerprint.toUpperCase() == fp) d = x;
++    }
++    if (d == null) {
++      _greeted.remove(fp);
++      return;
++    }
++    final t = security!.trust.classifyFingerprint(fp).trust;
++    if (t != PeerTrust.known && t != PeerTrust.trusted) {
++      _greeted.remove(fp);
++      return;
++    }
++    var ok = false;
++    try {
++      ok = await _registrar.call(d.info, d.address);
++    } on Object catch (e) {
++      _log.fine('greeting failed: ${e.runtimeType}');
++    }
++    if (ok || !_started || !_greeted.contains(fp)) return;
++    if (attempt >= _greetBackoff.length) return;
++    _greetRetry[fp] = Timer(_greetBackoff[attempt], () {
++      _greetRetry.remove(fp);
++      unawaited(_greet(fp, attempt + 1));
++    });
++  }
++
+   Future<void> _learnCertificate(DiscoveredDevice d) async {
+     final fp = d.info.fingerprint.toUpperCase();
+     final port = d.info.port;

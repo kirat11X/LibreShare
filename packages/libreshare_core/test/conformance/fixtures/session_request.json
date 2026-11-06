@@ -1,0 +1,40 @@
+{
+  "sender": {
+    "proto": "libreshare",
+    "v": "1.0",
+    "deviceId": "0f6c2a9e-7b1d-4c3e-8a5f-9e8d7c6b5a43",
+    "alias": "loopback-sender",
+    "platform": "linux",
+    "deviceType": "desktop",
+    "fingerprint": "",
+    "port": 53318,
+    "addrs": [],
+    "caps": ["resume"]
+  },
+  "pin": null,
+  "chunkSize": 4194304,
+  "files": [
+    {
+      "fileId": "f1",
+      "fileName": "empty.txt",
+      "relativePath": null,
+      "size": 0,
+      "mime": "text/plain",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "chunkCount": 0,
+      "modified": null
+    },
+    {
+      "fileId": "f2",
+      "fileName": "chunk-plus-one.bin",
+      "relativePath": null,
+      "size": 4194305,
+      "mime": "application/octet-stream",
+      "sha256": "938ed3faacee1cb99788419b4bbbe70690b67a0494621834c0e92424623645b6",
+      "chunkCount": 2,
+      "modified": "2026-10-30T10:00:00.000Z"
+    }
+  ],
+  "totalSize": 4194305,
+  "tunnelOffer": null
+}

@@ -1,0 +1,9 @@
+# E5 apply plan (orchestrator, 2026-11-06 14:38:50 by `date`; user decision: "apply fixes side by side", no second testers for the R series, no new subagents)
+
+Tool: `.toolchain/scratch/e5-apply/apply_e5.sh check|apply <id>` (dry-run of the patch, free destinations, snapshot of every touched file in `.toolchain/snap/e5-apply-<id>-<date>/`, patch, copy of the test files). The Lead delivers patches only, so the real tree has ONE writer (me).
+
+**Order (each step: check -> apply -> gate subset alone under `flock -o /tmp/libreshare-heavy.lock` -> STATUS line):** r4a (changes how ApiServer binds; others touch the same file area) -> r4e (pin test on the new server) -> r4d -> r4b -> r4c (restart test arrives as a documented skip) -> r1b -> r1a (test only) -> r1cd.
+**Per-step gate:** the item's new tests 3x; the suites its patch can affect (core always; CLI for r4a/r4c; app for r1cd); analyze + format at the repo root; `grep` no Flutter imports in core lib. **After the last item:** the full section-9 style gate (core, CLI, app, analyze, format, loopback plain+secure, packaging) and the counts go into `docs/test-reports/e5-acceptance.md`.
+**Precondition for every item:** its verifier report says SAFE TO APPLY (or SAFE AFTER FIXES with the fixes done and re-verified). No verifier report = not applied.
+**Known blockers before the CLI gate is green:** `loopback_smoke_secure_test` (state-dependent, fix in `tools/loopback_smoke.sh` is being written by a coder; until applied the CLI suite shows exactly 1 red and any OTHER red is a regression).
+**Recorded deviation (user):** no second tester for R1b, R4a, R4b, R4c, R4d; the independent verifier (mutation table, differential/probe tests) is the review. The residual risks the verifiers list stay in each report and in the E5 acceptance report as known limits.

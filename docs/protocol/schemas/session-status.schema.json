@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://libreshare.example/protocol/lsp1/schemas/session-status.schema.json",
+  "title": "SessionStatus",
+  "description": "Body returned by POST /sessions (202 PENDING, or 200 IN_PROGRESS on trusted auto-accept), GET /sessions/{sid} and POST /sessions/{sid}/finish. `status` is exactly one of the four TransferStatus values; causes of failure are carried in `failureReason` (a FAILED status SHOULD carry a non-null reason). `acceptedFiles` is keyed by fileId and is populated once the session is IN_PROGRESS or later. `sas` [I3] is present while a SAS comparison is pending (LSP-1 section 5.1): it carries the receiver's nonce Nr, chosen after the sender's commitment. Mirrors SessionStatus in packages/libreshare_core/lib/src/model/session_models.dart. Unknown members MUST be ignored.",
+  "type": "object",
+  "required": ["sessionId", "status"],
+  "properties": {
+    "sessionId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Random, unguessable session identifier chosen by the receiver."
+    },
+    "status": {
+      "enum": ["PENDING", "IN_PROGRESS", "COMPLETED", "FAILED"]
+    },
+    "failureReason": {
+      "enum": [
+        "REJECTED",
+        "TIMEOUT",
+        "CANCELLED",
+        "VERIFY_FAILED",
+        "NO_CONNECTION",
+        "DISK_FULL",
+        "PROTOCOL_ERROR",
+        null
+      ],
+      "description": "FailureReason when status is FAILED, otherwise null/absent."
+    },
+    "acceptedFiles": {
+      "type": "object",
+      "description": "Map fileId -> per-file bearer token and already-received chunk ranges. Default empty.",
+      "additionalProperties": { "$ref": "#/$defs/acceptedFile" }
+    },
+    "sas": {
+      "$ref": "#/$defs/sasChallenge",
+      "description": "[I3] Present only while a SAS comparison is pending, in answer to a request that carried `sasCommit`. Absent in the plaintext profile and when no commitment was sent."
+    }
+  },
+  "$defs": {
+    "sasChallenge": {
+      "type": "object",
+      "required": ["nonce"],
+      "properties": {
+        "nonce": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{22}$",
+          "description": "Nr: 16 random bytes chosen by the receiver after it received the commitment, base64url, exactly 22 characters."
+        }
+      }
+    },
+    "acceptedFile": {
+      "type": "object",
+      "required": ["token"],
+      "properties": {
+        "token": {
+          "type": "string",
+          "minLength": 22,
+          "pattern": "^[A-Za-z0-9_-]+={0,2}$",
+          "description": "128-bit random per-file bearer token, base64url (22 chars unpadded). Sent as `Authorization: Bearer <token>`."
+        },
+        "receivedRanges": { "$ref": "file-state.schema.json#/$defs/chunkRanges" }
+      }
+    }
+  },
+  "examples": [
+    { "sessionId": "c1d2e3f4-0a1b-4c2d-8e3f-a4b5c6d7e8f9", "status": "PENDING", "failureReason": null, "acceptedFiles": {} },
+    {
+      "sessionId": "c1d2e3f4-0a1b-4c2d-8e3f-a4b5c6d7e8f9",
+      "status": "IN_PROGRESS",
+      "failureReason": null,
+      "acceptedFiles": {
+        "f1": { "token": "mwiKDV2SFbOnBV-HSn3ehQ", "receivedRanges": [] },
+        "f2": { "token": "PfCtA719HZzJ7Kupi_t2sQ", "receivedRanges": [[0, 41], [50, 50]] }
+      }
+    },
+    { "sessionId": "c1d2e3f4-0a1b-4c2d-8e3f-a4b5c6d7e8f9", "status": "FAILED", "failureReason": "REJECTED", "acceptedFiles": {} },
+    {
+      "sessionId": "c1d2e3f4-0a1b-4c2d-8e3f-a4b5c6d7e8f9",
+      "status": "PENDING",
+      "failureReason": null,
+      "acceptedFiles": {},
+      "sas": { "nonce": "CDoMlgmj4NvlCLvMveRzeg" }
+    }
+  ]
+}

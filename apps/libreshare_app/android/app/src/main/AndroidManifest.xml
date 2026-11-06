@@ -1,0 +1,100 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!--
+      Increment 2 manifest: FOREGROUND-ONLY receive (design 01 section 4.3, fallback 2).
+      Spec section 15 lists more permissions; these are deliberately NOT declared yet:
+        - FOREGROUND_SERVICE, FOREGROUND_SERVICE_CONNECTED_DEVICE / _DATA_SYNC,
+          RECEIVE_BOOT_COMPLETED, BIND_QUICK_SETTINGS_TILE, WAKE_LOCK
+          -> Increment 3 (Android ReceiveService, tile, boot receiver; manifest delta 4.5).
+        - NEARBY_WIFI_DEVICES, CHANGE_WIFI_STATE, ACCESS_FINE_LOCATION
+          -> Increment 7 (hotspot / Wi-Fi Direct handoff).
+        - REQUEST_IGNORE_BATTERY_OPTIMIZATIONS is never declared (Play policy; LocalSend omits it):
+          the UI opens the system battery-optimisation list instead.
+        - ACCESS_LOCAL_NETWORK only when targetSdk reaches 37 (not needed at 36).
+      UNVERIFIED: no Android SDK on the dev box; this file has not been through aapt2 / a device.
+    -->
+
+    <!-- Sockets: HTTP API server and client, UDP multicast discovery. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
+    <!-- WifiManager.MulticastLock, held while discovering/receiving (MulticastLockChannel.kt). -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/>
+    <!-- QR scanning (mobile_scanner); requested at runtime, only when the scan screen opens. -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+    <!-- Android 13+: incoming-transfer prompts; requested at runtime, not at install. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+
+    <!-- Phones without a camera can still install and use manual / multicast discovery. -->
+    <uses-feature android:name="android.hardware.camera" android:required="false"/>
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
+
+    <application
+        android:label="LibreShare"
+        android:name="${applicationName}"
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:usesCleartextTraffic="true">
+        <!--
+          allowBackup=false: the device identity (keys, fingerprint) must never roam into a
+          cloud backup or an adb backup (Increment 3 stores keys; set it now so no backup of
+          an earlier install can ever contain them).
+
+          usesCleartextTraffic=true (Increment 2 ONLY): LSP/1 is plain HTTP on the LAN until
+          Increment 3 adds mutual TLS, and a LAN peer is an arbitrary private IP address, so a
+          per-domain network-security-config cannot enumerate it. Since API 28 the platform
+          blocks cleartext by default for apps that use the platform HTTP stack. Whether
+          dart:io's HttpClient consults that policy depends on the Flutter engine (UNVERIFIED
+          here, no device), so the flag removes the question instead of risking "cleartext
+          not permitted" on every LAN transfer. TODO(Inc 3): set to false (or drop the
+          attribute) when transfers are TLS-only, and verify on a device.
+        -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <!-- Specifies an Android theme to apply to this Activity as soon as
+                 the Android process has started. This theme is visible to the user
+                 while the Flutter UI initializes. After that, this theme continues
+                 to determine the Window background behind the Flutter UI. -->
+            <meta-data
+              android:name="io.flutter.embedding.android.NormalTheme"
+              android:resource="@style/NormalTheme"
+              />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+        <!-- "Open" for received files: read-only content Uris (FileOpenerChannel.kt, res/xml/file_paths.xml). -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+        <!-- Don't delete the meta-data below.
+             This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+    </application>
+    <!-- Required to query activities that can process text, see:
+         https://developer.android.com/training/package-visibility and
+         https://developer.android.com/reference/android/content/Intent#ACTION_PROCESS_TEXT.
+
+         In particular, this is used by the Flutter engine in io.flutter.plugin.text.ProcessTextPlugin. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT"/>
+            <data android:mimeType="text/plain"/>
+        </intent>
+    </queries>
+</manifest>

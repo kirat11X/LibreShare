@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://libreshare.example/protocol/lsp1/schemas/error-envelope.schema.json",
+  "title": "ErrorEnvelope",
+  "description": "Body of every non-2xx response of the LSP/1 REST API. `code` equals LsErrorCode.wire in packages/libreshare_core/lib/src/model/ls_exception.dart; the HTTP status for each code is fixed (see LSP-1 section 4.3). A server MUST emit all three members; clients MUST tolerate a missing `message` or `retryable` and MUST map an unknown `code` to INTERNAL. The 426 response adds a top-level `supported` array. AUTH_INVALID (401) and KEY_CHANGED (403) belong to the LSP/1.1 secure profile (Increment 3). A Contacts-only receiver answers a stranger with the plain NOT_FOUND envelope of an unknown route (no new code, LSP-1 section 5.4). Unknown members MUST be ignored.",
+  "type": "object",
+  "required": [
+    "error"
+  ],
+  "properties": {
+    "error": {
+      "type": "object",
+      "required": [
+        "code",
+        "message",
+        "retryable"
+      ],
+      "properties": {
+        "code": {
+          "enum": [
+            "AUTH_INVALID",
+            "KEY_CHANGED",
+            "PIN_REQUIRED",
+            "PIN_INVALID",
+            "TOKEN_INVALID",
+            "BLOCKED",
+            "NOT_FOUND",
+            "BUSY",
+            "WRONG_STATE",
+            "MISSING_CHUNKS",
+            "CANCELLED",
+            "TOO_LARGE",
+            "OUT_OF_RANGE",
+            "CHUNK_HASH_MISMATCH",
+            "VERIFY_FAILED",
+            "RATE_LIMITED",
+            "BAD_REQUEST",
+            "INSUFFICIENT_STORAGE",
+            "UPGRADE_REQUIRED",
+            "INTERNAL"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "Human-readable diagnostic. MUST NOT contain file contents, keys, PINs or tunnel URL fragments."
+        },
+        "retryable": {
+          "type": "boolean",
+          "description": "True if the same request may succeed when retried unchanged (after back-off)."
+        }
+      }
+    },
+    "supported": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Only with UPGRADE_REQUIRED (HTTP 426): the protocol majors this server supports, e.g. [\"1\"]. Top-level sibling of `error`."
+    }
+  },
+  "examples": [
+    {
+      "error": {
+        "code": "CHUNK_HASH_MISMATCH",
+        "message": "chunk 7 sha256 mismatch",
+        "retryable": true
+      }
+    },
+    {
+      "error": {
+        "code": "TOKEN_INVALID",
+        "message": "bad or missing bearer token",
+        "retryable": false
+      }
+    },
+    {
+      "error": {
+        "code": "UPGRADE_REQUIRED",
+        "message": "unsupported protocol major 2",
+        "retryable": false
+      },
+      "supported": [
+        "1"
+      ]
+    },
+    {
+      "error": {
+        "code": "AUTH_INVALID",
+        "message": "identity proof rejected",
+        "retryable": false
+      }
+    },
+    {
+      "error": {
+        "code": "KEY_CHANGED",
+        "message": "certificate differs from the pinned one for this device",
+        "retryable": false
+      }
+    }
+  ]
+}

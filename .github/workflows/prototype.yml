@@ -1,0 +1,84 @@
+# Builds the prototype for Linux, Windows and Android on GitHub-hosted runners (free for public
+# repositories) and uploads one artifact per platform. Run it from the Actions tab
+# ("Run workflow") or by pushing a tag like v0.1.0-proto1, which also attaches the files to a release.
+name: prototype
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+env:
+  FLUTTER_VERSION: "3.47.9"
+
+permissions:
+  contents: write # only used to attach files to a release on tag pushes
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: linux }
+          - { os: ubuntu-latest, target: android }
+          - { os: windows-latest, target: windows }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - if: matrix.target == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev
+
+      - if: matrix.target == 'android'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - run: flutter pub get
+        working-directory: apps/libreshare_app
+
+      # The same tests the dev box runs, so a platform-specific failure shows up in the log. For a
+      # prototype build the goal is the binary, so a failing test does not block packaging (ci.yml is
+      # the strict gate). Check this step's result before trusting a build.
+      - run: flutter test
+        working-directory: apps/libreshare_app
+        continue-on-error: true
+
+      # tools/package_prototype.sh builds and collects everything into dist/prototype/.
+      - name: Build and package
+        shell: bash
+        run: tools/package_prototype.sh ${{ matrix.target }}
+        env:
+          # tools/env.sh is dev-box specific; on runners Flutter/Java/Android come from the actions above.
+          LS_CI: "1"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libreshare-prototype-${{ matrix.target }}
+          path: dist/prototype/*
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum * | grep -v SHA256SUMS > SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          prerelease: true

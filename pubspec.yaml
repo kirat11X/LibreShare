@@ -1,0 +1,8 @@
+name: libreshare_workspace
+publish_to: none
+environment:
+  sdk: ^3.13.0
+workspace:
+  - packages/libreshare_core
+  - packages/libreshare_cli
+  - apps/libreshare_app

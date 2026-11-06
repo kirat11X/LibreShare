@@ -1,0 +1,5 @@
+# Keep the container entrypoint and compose files LF even on a Windows checkout (autocrlf).
+*.sh        text eol=lf
+*.yaml      text eol=lf
+Dockerfile  text eol=lf
+*.dockerignore text eol=lf

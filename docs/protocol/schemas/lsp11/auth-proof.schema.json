@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://libreshare.example/protocol/lsp1/schemas/auth-proof.schema.json",
+  "title": "AuthProof",
+  "description": "Decoded form of the `X-LS-Auth` request header (LSP-1 section 4.3.6; LSP/1.1 secure profile, Increment 3). On the wire the header value is the five dot-separated parts `v1.<cert>.<ts>.<nonce>.<sig>`; `$defs/header` pins that exact text form (at most 4 KiB), this document pins the decoded members. `cert` is the sender's DER certificate (at most 2 KiB = 2731 base64url characters), `ts` the sender's clock in Unix epoch milliseconds (accepted within +-120 s of the receiver's clock), `nonce` 16 random bytes (22 characters) remembered for replay detection, `sig` the raw 64-byte ECDSA P-256 signature r||s (86 characters) over the signed text of LSP-1 section 4.3.6 (domain `LSP1-AUTH-v1`, request method and target, SHA-256 of the body, ts, nonce, server fingerprint, client fingerprint). The sender's fingerprint is not carried: it is the uppercase hex SHA-256 of `cert`. Base64url is unpadded and canonical. The header is not JSON on the wire; this schema validates the object a parser produces from it.",
+  "type": "object",
+  "required": ["v", "cert", "ts", "nonce", "sig"],
+  "properties": {
+    "v": {
+      "const": "v1",
+      "description": "Proof format version. Only `v1` exists; anything else is AUTH_INVALID."
+    },
+    "cert": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2731,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "description": "Sender's X.509 certificate, DER, base64url without padding; at most 2048 bytes."
+    },
+    "ts": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9999999999999999,
+      "description": "Sender clock, Unix epoch milliseconds. On the wire: decimal digits without leading zeros (it is signed as that exact text)."
+    },
+    "nonce": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{22}$",
+      "description": "16 random bytes, base64url, exactly 22 characters."
+    },
+    "sig": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{86}$",
+      "description": "ECDSA P-256 signature, raw r||s (64 bytes), base64url, exactly 86 characters."
+    }
+  },
+  "$defs": {
+    "header": {
+      "type": "string",
+      "maxLength": 4096,
+      "pattern": "^v1\\.[A-Za-z0-9_-]{1,2731}\\.(0|[1-9][0-9]{0,15})\\.[A-Za-z0-9_-]{22}\\.[A-Za-z0-9_-]{86}$",
+      "description": "The whole `X-LS-Auth` header value: `v1.<cert>.<ts>.<nonce>.<sig>`. Base64url never contains `.`, so the five parts split unambiguously. At most 4096 bytes."
+    }
+  },
+  "examples": [
+    {
+      "v": "v1",
+      "cert": "MIIB1DCCAXugAwIBAgIUTT0ZRJDav2Cb0HrpMLR5zS-EL8QwCgYIKoZIzj0EAwIwLzEtMCsGA1UEAwwkNWIwZjdkOGUtM2MxYS00ZjJiLTlkNmUtMWEyYjNjNGQ1ZTZmMB4XDTI2MTEwNDE2NDkwMVoXDTM2MTEwMTE2NDkwMVowLzEtMCsGA1UEAwwkNWIwZjdkOGUtM2MxYS00ZjJiLTlkNmUtMWEyYjNjNGQ1ZTZmMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEIClOAiTdlWulE15iZBo7Pu9lchJajPnWzJ2OcxvsBnPnvvuJ0gjVMsOmRIZNvozN22eRdyf242VvChXIdaC_uaN1MHMwHQYDVR0OBBYEFI1So4JYfaT6Yx6cw2KSTlK_mZnzMB8GA1UdIwQYMBaAFI1So4JYfaT6Yx6cw2KSTlK_mZnzMAwGA1UdEwEB_wQCMAAwDgYDVR0PAQH_BAQDAgeAMBMGA1UdJQQMMAoGCCsGAQUFBwMBMAoGCCqGSM49BAMCA0cAMEQCICWOKR4zMl1mclyseO2VePinvqWtP31KgK5uuOP2BDzVAiAc7C_GTpk5ee2OAkH-hrifHvCU3AVZhGNYMo0ZXAp8-A",
+      "ts": 1793793600000,
+      "nonce": "8IINEzMzMfap3Tw5YtIeBQ",
+      "sig": "RhEDNcx2-fGFpWYrbvTs47VQJVzKeNpR6qJbKY4LcZ78k4Cck-8ZJGDVSMantm3B19t72mSHx9UUK6Ugrq7yJg"
+    }
+  ]
+}

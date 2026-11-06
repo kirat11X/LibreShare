@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Android Foreground Background Receive Smoke Script (Card F4 / U1)
+# Verifies that background transfer completes while device is asleep/screen off.
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+source "$REPO_ROOT/tools/env.sh"
+
+echo "=== 1. Starting Android Background Receive Service ==="
+adb shell am start-foreground-service \
+  -n dev.libreshare.libreshare_app/.ReceiveService \
+  -a dev.libreshare.action.START_RECEIVE \
+  --es extra_title "LibreShare" \
+  --es extra_body "Ready to receive files"
+
+echo "=== 2. Verify Foreground Service Type ==="
+adb shell dumpsys activity services dev.libreshare.libreshare_app | grep -E "isForeground=true|foregroundServiceType"
+
+echo "=== 3. Simulate Screen Off and Doze State ==="
+# Keyevent 26 = POWER (turn screen off)
+adb shell input keyevent 26
+# Force idle / doze
+adb shell dumpsys deviceidle force-idle
+
+echo "=== 4. Execute Transfer While Screen is Off ==="
+"$REPO_ROOT/tools/loopback_smoke.sh" 50 53925 --secure
+
+echo "=== 5. Turn Screen Back On and Un-Doze ==="
+adb shell dumpsys deviceidle unforce
+adb shell input keyevent 26
+
+echo "=== Background Receive Smoke Succeeded ==="

@@ -1,0 +1,16 @@
+# BuildKit uses "<Dockerfile name>.dockerignore" in preference to a root .dockerignore.
+# Allow-list: nothing is sent unless it is named below (no apps/, .toolchain/, .git, dist/, docs,
+# the spec, ...).
+*
+
+!/pubspec.yaml
+!/pubspec.lock
+!/packages/**
+!/deploy/docker/entrypoint.sh
+
+# ... minus build products and test code inside packages/
+**/.dart_tool
+**/build
+**/.packages
+**/test
+**/*.lspart

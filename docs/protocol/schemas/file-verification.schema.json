@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://libreshare.example/protocol/lsp1/schemas/file-verification.schema.json",
+  "title": "FileVerification",
+  "description": "200 body of POST /api/v1/sessions/{sid}/files/{fid}/complete (FR-09/10). `sha256` is the lowercase hex SHA-256 the receiver computed over the reassembled file. A mismatch is reported as 422 VERIFY_FAILED, not as verified=false. Mirrors FileVerification in packages/libreshare_core/lib/src/model/session_models.dart. Unknown members MUST be ignored.",
+  "type": "object",
+  "required": ["verified", "sha256"],
+  "properties": {
+    "verified": { "type": "boolean" },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "examples": [
+    {
+      "verified": true,
+      "sha256": "938ed3faacee1cb99788419b4bbbe70690b67a0494621834c0e92424623645b6"
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "AUTH_INVALID",
+    "message": "identity proof rejected",
+    "retryable": false
+  }
+}

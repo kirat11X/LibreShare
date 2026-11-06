@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://libreshare.example/protocol/lsp1/schemas/discovery-announce.schema.json",
+  "title": "DiscoveryAnnounce",
+  "description": "UDP multicast / unicast discovery datagram (LSP-1 section 4.2). Exactly one of two shapes: an ANNOUNCE (Increment 2; a DeviceInfo plus `announce`) or a signed BYE (Increment 3, LSP/1.1; goodbye, LSP-1 section 4.2 rule 9; recognised by `t:\"bye\"`, it carries no `alias` and no `announce`, so LSP/1.0 decoders drop it silently and the peer simply expires after 90 s). The serialized datagram MUST NOT exceed 1200 bytes (not expressible in JSON Schema). Receivers drop datagrams that are not valid JSON, whose `proto` is not `libreshare`, or whose major `v` is unknown. ANNOUNCE: `announce:true` asks the receiver to reply via POST /register; `announce:false` is the unicast reply. `port:0` is a send-only probe (LSP-1 section 4.2 rule 8): the sender has no listener, so it MUST carry `announce:true` and receivers MUST NOT register with it, list it or send it a session. In the secure profile `v` is `1.1` and `fingerprint` is the 64-hex fingerprint (it is empty only in the plaintext profile). BYE: the `sig` is an ECDSA P-256 signature (raw r||s) over `LSP1-BYE` NUL deviceId fingerprint ts (ts as decimal text); see rule 9 for the verification rules. A datagram that is both shapes at once is invalid. Unknown members MUST be ignored.",
+  "oneOf": [
+    { "$ref": "#/$defs/announce" },
+    { "$ref": "#/$defs/bye" }
+  ],
+  "$defs": {
+    "announce": {
+      "title": "Announce",
+      "allOf": [{ "$ref": "device-info.schema.json" }],
+      "type": "object",
+      "required": ["proto", "v", "deviceId", "alias", "fingerprint", "port", "announce"],
+      "properties": {
+        "port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "TCP port of the announcing device's API listener (>= 1), or 0 for a send-only probe from a device that is not receiving (Receive mode Off). Port 0 is only valid together with announce:true."
+        },
+        "announce": {
+          "type": "boolean",
+          "description": "true: initial/periodic announcement expecting a reply; false: reply to an announcement."
+        }
+      },
+      "if": {
+        "properties": { "port": { "const": 0 } },
+        "required": ["port"]
+      },
+      "then": {
+        "properties": { "announce": { "const": true } }
+      }
+    },
+    "bye": {
+      "title": "Bye",
+      "type": "object",
+      "required": ["proto", "v", "t", "deviceId", "fingerprint", "ts", "sig"],
+      "properties": {
+        "proto": { "const": "libreshare" },
+        "v": {
+          "type": "string",
+          "pattern": "^1\\.([1-9][0-9]*)$",
+          "description": "1.1 or a later 1.x: the bye datagram exists from LSP/1.1."
+        },
+        "t": {
+          "const": "bye",
+          "description": "Datagram type. Only `bye` is defined."
+        },
+        "deviceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fingerprint": {
+          "type": "string",
+          "pattern": "^[0-9A-F]{64}$",
+          "description": "Fingerprint of the leaving device; the verifier uses the public key of the certificate it holds for this fingerprint."
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Sender clock, Unix epoch milliseconds. Accepted within +-60 s of the receiver's clock."
+        },
+        "sig": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{86}$",
+          "description": "ECDSA P-256 signature, raw r||s (64 bytes), base64url, 86 characters."
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "proto": "libreshare",
+      "v": "1.0",
+      "deviceId": "5b0f7d8e-3c1a-4f2b-9d6e-1a2b3c4d5e6f",
+      "alias": "Ravi-ThinkPad",
+      "platform": "windows",
+      "deviceType": "desktop",
+      "fingerprint": "FC074C4445C65D5C5208058734A816CFC5E77A51D5D9B596AD324828CEFA422E",
+      "port": 53318,
+      "addrs": [
+        { "ip": "192.168.1.23", "if": "wifi" },
+        { "ip": "10.0.0.5", "if": "ethernet" }
+      ],
+      "caps": ["resume", "tunnel", "sas"],
+      "announce": true
+    },
+    {
+      "proto": "libreshare",
+      "v": "1.0",
+      "deviceId": "9c1d2e3f-4a5b-4c6d-8e7f-0a1b2c3d4e5f",
+      "alias": "Ravi-Pixel",
+      "platform": "android",
+      "deviceType": "phone",
+      "fingerprint": "",
+      "port": 0,
+      "addrs": [{ "ip": "192.168.1.40", "if": "wifi" }],
+      "caps": ["resume"],
+      "announce": true
+    },
+    {
+      "proto": "libreshare",
+      "v": "1.1",
+      "t": "bye",
+      "deviceId": "5b0f7d8e-3c1a-4f2b-9d6e-1a2b3c4d5e6f",
+      "fingerprint": "FC074C4445C65D5C5208058734A816CFC5E77A51D5D9B596AD324828CEFA422E",
+      "ts": 1793793600000,
+      "sig": "qq6W4kSVZVCBeRQO_-lRWX2Fuez5S5sRK1ajtPA9krrI22cJWleeB4Ajdknwm6ccrod7lR8VjG5VM9f8zugryQ"
+    }
+  ]
+}

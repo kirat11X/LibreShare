@@ -1,0 +1,296 @@
+--- a/packages/libreshare_core/lib/src/storage/atomic_file.dart	1970-01-01 05:30:00.000000000 +0530
++++ b/packages/libreshare_core/lib/src/storage/atomic_file.dart	2026-11-06 14:03:22.392248479 +0530
+@@ -0,0 +1,164 @@
++/// Shared atomic-replace helper (E5 / R1b).
++///
++/// Contract: after a call the target holds exactly the new bytes or, on any
++/// failure, exactly the OLD bytes; no temporary or backup file is left behind.
++/// The old file is never deleted before the new one is committed: where the
++/// OS refuses to rename onto an existing file (Windows), the old file is moved
++/// aside, the new one renamed in, and the old one restored if that fails.
++library;
++
++import 'dart:async';
++import 'dart:io';
++
++import 'package:path/path.dart' as p;
++
++/// Performs one rename. Tests set [atomicRenameOverride] to observe or fail it.
++typedef AtomicRenameFn = Future<void> Function(File from, String toPath);
++
++/// Test seam: when set, EVERY rename done by this library goes through it.
++AtomicRenameFn? atomicRenameOverride;
++
++Future<void> _rename(File from, String toPath) {
++  final hook = atomicRenameOverride;
++  return hook != null ? hook(from, toPath) : from.rename(toPath);
++}
++
++final Map<String, Future<void>> _queues = {};
++
++/// Errors for which moving the old file aside cannot help (the data cannot
++/// be moved to the target's directory / disk is full): rethrown at once.
++bool _isHopeless(FileSystemException e) {
++  final code = e.osError?.errorCode;
++  if (code == null) return false;
++  return Platform.isWindows
++      ? (code == 17 || code == 112 || code == 39) // NOT_SAME_DEVICE, DISK_FULL
++      : (code == 18 || code == 28); // EXDEV, ENOSPC
++}
++
++File _bakOf(File target) => File('${target.path}.bak');
++
++void _deleteQuietly(File f) {
++  try {
++    if (f.existsSync()) f.deleteSync();
++  } on Object {
++    // best effort
++  }
++}
++
++/// Restores `<target>.bak` (left by an interrupted or doubly failed
++/// replace-with-move-aside) to [target], but only when [target] is missing.
++/// Returns whether it restored. Not wired into the stores yet.
++Future<bool> recoverAtomicBackup(File target) async {
++  final bak = _bakOf(target);
++  if (!bak.existsSync() ||
++      FileSystemEntity.typeSync(target.path) != FileSystemEntityType.notFound) {
++    return false;
++  }
++  await _rename(bak, target.path);
++  return true;
++}
++
++/// Writes [bytes] to `<target>.tmp`, flushes, then commits it over [target].
++/// Writers to the same target are serialised in-process. [mode] (POSIX, e.g.
++/// 0x180 for 0600) is applied to the empty temporary file before any byte is
++/// written and ignored on Windows. [prepareTmp] also runs on the empty file.
++Future<void> atomicWriteBytes(
++  File target,
++  List<int> bytes, {
++  int? mode,
++  Future<void> Function(File tmp)? prepareTmp,
++}) {
++  final key = p.normalize(p.absolute(target.path));
++  final prev = _queues[key] ?? Future<void>.value();
++  final run = prev.then((_) => _write(target, bytes, mode, prepareTmp));
++  final tail = run.then<void>((_) {}, onError: (Object _) {});
++  _queues[key] = tail;
++  tail.then((_) {
++    if (identical(_queues[key], tail)) _queues.remove(key);
++  });
++  return run;
++}
++
++Future<void> _write(
++  File target,
++  List<int> bytes,
++  int? mode,
++  Future<void> Function(File tmp)? prepareTmp,
++) async {
++  final tmp = File('${target.path}.tmp');
++  try {
++    final tmpType = FileSystemEntity.typeSync(tmp.path, followLinks: false);
++    if (tmpType == FileSystemEntityType.file) {
++      await tmp.delete(); // stale file from an earlier crash
++    } else if (tmpType == FileSystemEntityType.link) {
++      await Link(tmp.path).delete(); // never write through a link
++    }
++    await tmp.create();
++    if (mode != null && !Platform.isWindows) {
++      final r = await Process.run('chmod', [
++        mode.toRadixString(8),
++        tmp.absolute.path,
++      ]);
++      if (r.exitCode != 0) {
++        throw FileSystemException('cannot set file mode', tmp.path);
++      }
++    }
++    if (prepareTmp != null) await prepareTmp(tmp);
++    final raf = await tmp.open(mode: FileMode.write);
++    try {
++      await raf.writeFrom(bytes);
++      await raf.flush();
++    } finally {
++      await raf.close();
++    }
++    await atomicReplace(tmp, target);
++  } on Object {
++    try {
++      if (tmp.existsSync()) await tmp.delete();
++    } on Object {
++      // best effort: the temporary file is never read anyway
++    }
++    rethrow;
++  }
++}
++
++/// Renames [tmp] over [target]. [tmp] must exist (else [FileSystemException]
++/// and [target] is untouched). On failure [target] keeps its old content and
++/// [tmp] is left for the caller to clean up.
++Future<void> atomicReplace(File tmp, File target) async {
++  if (!tmp.existsSync()) {
++    throw FileSystemException('temporary file is missing', tmp.path);
++  }
++  final bak = _bakOf(target);
++  try {
++    await _rename(tmp, target.path);
++  } on FileSystemException catch (first) {
++    if (_isHopeless(first) ||
++        FileSystemEntity.typeSync(target.path, followLinks: false) !=
++            FileSystemEntityType.file) {
++      rethrow;
++    }
++    // Windows-style refusal to replace: move the old file aside, never delete
++    // it before the new one is committed. The target is newer than a stale
++    // backup, so that one may go.
++    _deleteQuietly(bak);
++    try {
++      await _rename(target, bak.path);
++    } on Object {
++      throw first; // old file is still in place
++    }
++    try {
++      await _rename(tmp, target.path);
++    } on Object {
++      try {
++        await _rename(bak, target.path);
++      } on Object {
++        // double failure: the old data stays in <target>.bak
++        // (see recoverAtomicBackup)
++      }
++      throw first;
++    }
++  }
++  // Committed: any backup is older than the new target.
++  _deleteQuietly(bak);
++}
+--- a/packages/libreshare_core/lib/src/storage/file_secret_store.dart	2026-11-04 22:24:20.756770471 +0530
++++ b/packages/libreshare_core/lib/src/storage/file_secret_store.dart	2026-11-06 12:06:52.039955147 +0530
+@@ -28,6 +28,7 @@
+ import 'package:meta/meta.dart';
+ 
+ import '../security/contracts.dart';
++import 'atomic_file.dart';
+ 
+ final Logger _log = Logger('libreshare.storage.secret');
+ 
+@@ -78,33 +79,14 @@
+ /// `.tmp` from an earlier crash is overwritten and never read. [prepareTmp]
+ /// runs on the (still empty) temporary file before any byte is written, which
+ /// is where permissions are applied so content is never briefly world-readable.
+-/// Single writer per [target] is assumed; callers serialise.
++/// Delegates to [atomicWriteBytes] (writers to one target are serialised).
+ @internal
+ Future<void> writeFileAtomically(
+   File target,
+   List<int> data, {
+   Future<void> Function(File tmp)? prepareTmp,
+ }) async {
+-  final tmp = File('${target.path}.tmp');
+-  try {
+-    await tmp.create();
+-    if (prepareTmp != null) await prepareTmp(tmp);
+-    final raf = await tmp.open(mode: FileMode.write);
+-    try {
+-      await raf.writeFrom(data);
+-      await raf.flush();
+-    } finally {
+-      await raf.close();
+-    }
+-    await tmp.rename(target.path);
+-  } on Object {
+-    try {
+-      await tmp.delete();
+-    } on Object {
+-      // best effort: the temporary file is never read anyway
+-    }
+-    rethrow;
+-  }
++  await atomicWriteBytes(target, data, prepareTmp: prepareTmp);
+ }
+ 
+ // File framing: "LSS1" | u32be length | payload | SHA-256(everything before).
+--- a/packages/libreshare_core/lib/src/storage/receive_settings_store.dart	2026-11-03 03:36:13.807984471 +0530
++++ b/packages/libreshare_core/lib/src/storage/receive_settings_store.dart	2026-11-06 12:06:47.262309973 +0530
+@@ -10,6 +10,7 @@
+ import 'package:logging/logging.dart';
+ 
+ import '../receive/receive_settings.dart';
++import 'atomic_file.dart';
+ 
+ abstract interface class ReceiveSettingsStore {
+   /// Never throws: a missing, unreadable or corrupt record yields defaults.
+@@ -54,8 +55,6 @@
+   Future<void> _tail = Future<void>.value();
+ 
+   File get file => File('${directory.path}${Platform.pathSeparator}$fileName');
+-  File get _tmp =>
+-      File('${directory.path}${Platform.pathSeparator}$fileName.tmp');
+ 
+   @override
+   Future<ReceivePersisted> load() async {
+@@ -82,11 +81,9 @@
+ 
+   Future<void> _write(ReceivePersisted data) async {
+     await directory.create(recursive: true);
+-    final tmp = _tmp;
+-    await tmp.writeAsString(
+-      const JsonEncoder.withIndent('  ').convert(data.toJson()),
+-      flush: true,
++    await atomicWriteBytes(
++      file,
++      utf8.encode(const JsonEncoder.withIndent('  ').convert(data.toJson())),
+     );
+-    await tmp.rename(file.path);
+   }
+ }
+--- a/packages/libreshare_core/lib/src/transfer/file_receiver.dart	2026-11-05 19:26:29.796077054 +0530
++++ b/packages/libreshare_core/lib/src/transfer/file_receiver.dart	2026-11-06 12:06:52.037940036 +0530
+@@ -37,6 +37,7 @@
+ import '../model/transfer_status.dart';
+ import '../protocol.dart';
+ import '../server/incoming_transfer_handler.dart';
++import '../storage/atomic_file.dart';
+ import 'chunker.dart';
+ import 'filename_sanitizer.dart';
+ import 'resume_store.dart';
+@@ -906,7 +907,7 @@
+       await f.target.parent.create(recursive: true);
+     }
+     try {
+-      await f.partial.rename(f.target.path);
++      await atomicReplace(f.partial, f.target);
+     } on FileSystemException {
+       if (partialDir == null) rethrow;
+       // Different file system: copy next to the target, then rename.
+@@ -915,7 +916,7 @@
+       );
+       try {
+         await f.partial.copy(tmp.path);
+-        await tmp.rename(f.target.path);
++        await atomicReplace(tmp, f.target);
+       } catch (_) {
+         _deleteQuietly(tmp);
+         rethrow;
+--- a/packages/libreshare_core/lib/src/transfer/resume_store.dart	2026-11-03 02:04:13.113924701 +0530
++++ b/packages/libreshare_core/lib/src/transfer/resume_store.dart	2026-11-06 12:06:47.261875310 +0530
+@@ -15,6 +15,7 @@
+ 
+ import '../clock.dart';
+ import '../model/session_models.dart';
++import '../storage/atomic_file.dart';
+ import 'chunker.dart';
+ 
+ /// Sessions are resumable for 24 hours (spec §4.4).
+@@ -206,9 +207,7 @@
+     };
+     final target = sidecarFile;
+     await target.parent.create(recursive: true);
+-    final tmp = File('${target.path}.tmp');
+-    await tmp.writeAsString(jsonEncode(json), flush: true);
+-    await tmp.rename(target.path);
++    await atomicWriteBytes(target, utf8.encode(jsonEncode(json)));
+   }
+ }
+ 

@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://libreshare.example/protocol/lsp1/schemas/pair-response.schema.json",
+  "title": "PairResponse",
+  "description": "200 body of POST /api/v1/pair (QR pairing, LSP-1 sections 4.3.4 and 5.3; LSP/1.1 secure profile, Increment 3). `accepted:true`: the inviter's user pressed Accept; `nonce` is nA (16 random bytes) and `mac = HMAC-SHA256(S, \"LSP1-PAIR-ACK\\0\" || fpA || fpB || nA || nB)` proves the inviter holds `S`; both sides then derive K_pair locally (it never travels) and pin each other as trusted. `accepted:false`: the inviter declined or did not decide within 125 s; `nonce` and `mac` are absent. A request with a wrong `mac`, no active invite, or an expired or spent invite is NOT answered with this body (401 AUTH_INVALID resp. 404 NOT_FOUND). Mirrors PairResponse in packages/libreshare_core/lib/src/model/session_models.dart. Unknown members MUST be ignored.",
+  "type": "object",
+  "required": ["accepted", "responder"],
+  "properties": {
+    "accepted": { "type": "boolean" },
+    "responder": {
+      "description": "The inviter's DeviceInfo; its `fingerprint` MUST equal the fingerprint of the TLS certificate (and of the QR code).",
+      "allOf": [
+        { "$ref": "device-info.schema.json" },
+        {
+          "required": ["fingerprint"],
+          "properties": {
+            "fingerprint": { "pattern": "^[0-9A-F]{64}$" }
+          }
+        }
+      ]
+    },
+    "nonce": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{22}$",
+      "description": "nA: 16 random bytes, base64url, 22 characters. Present iff accepted."
+    },
+    "mac": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{43}$",
+      "description": "Confirmation HMAC-SHA256 (32 bytes), base64url, 43 characters. Present iff accepted."
+    }
+  },
+  "if": {
+    "properties": { "accepted": { "const": true } },
+    "required": ["accepted"]
+  },
+  "then": { "required": ["nonce", "mac"] },
+  "else": {
+    "not": {
+      "anyOf": [{ "required": ["nonce"] }, { "required": ["mac"] }]
+    }
+  },
+  "examples": [
+    {
+      "accepted": true,
+      "responder": {
+        "proto": "libreshare",
+        "v": "1.1",
+        "deviceId": "0f6c2a9e-7b1d-4c3e-8a5f-9e8d7c6b5a43",
+        "alias": "Ravi-Pixel",
+        "platform": "android",
+        "deviceType": "phone",
+        "fingerprint": "1F819647D8A757EEBF01D603D43E7608511EF99B48C0E58D5EC33F78B13C0314",
+        "port": 53318,
+        "addrs": [{ "ip": "192.168.1.40", "if": "wifi" }],
+        "caps": ["resume", "sas", "pair"]
+      },
+      "nonce": "h8w8DIDnVCinhnLjcM7diQ",
+      "mac": "CGZJNDJ2jui0wwBfArn0jI9RTFkz0LVMXNpRnZGM5pE"
+    },
+    {
+      "accepted": false,
+      "responder": {
+        "proto": "libreshare",
+        "v": "1.1",
+        "deviceId": "0f6c2a9e-7b1d-4c3e-8a5f-9e8d7c6b5a43",
+        "alias": "Ravi-Pixel",
+        "platform": "android",
+        "deviceType": "phone",
+        "fingerprint": "1F819647D8A757EEBF01D603D43E7608511EF99B48C0E58D5EC33F78B13C0314",
+        "port": 53318,
+        "addrs": [{ "ip": "192.168.1.40", "if": "wifi" }],
+        "caps": ["resume", "sas", "pair"]
+      }
+    }
+  ]
+}

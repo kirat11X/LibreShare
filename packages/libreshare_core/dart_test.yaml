@@ -1,0 +1,11 @@
+# Test tags used by this package.
+#
+#   slow       multi-second end-to-end runs (e.g. a 64 MiB transfer). They run by
+#              default; skip them with `dart test -x slow`.
+#   very-slow  minutes-long runs (5 GiB sparse transfer). Skipped unless the
+#              environment variable LS_SLOW=1 is set (see the test itself).
+tags:
+  slow:
+    timeout: 5m
+  very-slow:
+    timeout: 45m
