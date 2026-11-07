@@ -1,0 +1,20 @@
+[cert1] start 2026-11-06 13:59:51
+[cert1] end 2026-11-06 14:01:47 rc=0  cmd: dart test -j 1 test/unit/peer_registry_cert_cache_test.dart
+[cert2] start 2026-11-06 14:02:03
+[cert2] end 2026-11-06 14:03:58 rc=0  cmd: dart test -j 1 test/unit/peer_registry_cert_cache_test.dart
+[cert3] start 2026-11-06 14:04:15
+[cert3] end 2026-11-06 14:06:10 rc=0  cmd: dart test -j 1 test/unit/peer_registry_cert_cache_test.dart
+[registry] start 2026-11-06 14:08:56
+[registry] end 2026-11-06 14:09:07 rc=0  cmd: dart test -j 1 test/unit/multicast_discovery_test.dart test/unit/peer_registry_test.dart test/unit/multicast_probe_test.dart test/unit/peer_registry_remove_test.dart test/unit/goodbye_test.dart test/unit/announce_fingerprint_test.dart test/integration/raw_multicast_test.dart test/security/contacts_only_discovery_test.dart test/security/p6b_review_test.dart
+[full] start 2026-11-06 14:13:45
+[full] end 2026-11-06 14:18:48 rc=0  cmd: dart test -j 1
+[analyze] start 2026-11-06 14:24:51
+[analyze] end 2026-11-06 14:24:56 rc=0  cmd: dart analyze --fatal-infos
+[format] start 2026-11-06 14:27:02
+[format] end 2026-11-06 14:27:04 rc=0  cmd: dart format --output=none --set-exit-if-changed .
+[probes] start 2026-11-06 14:43:41
+[probes] end 2026-11-06 15:03:30 rc=0  cmd: cp '/home/kirat/coding/Software Engineering LibreShare/.toolchain/scratch/e5-r4d-verify/peer_registry_cert_cache_verifier_probes_test.dart' test/unit/ && dart test -j 1 test/unit/peer_registry_cert_cache_verifier_probes_test.dart; rc=$?; rm -f test/unit/peer_registry_cert_cache_verifier_probes_test.dart; exit $rc
+[mut-a] start 2026-11-06 15:14:35
+[mut-a] end 2026-11-06 15:16:41 rc=0  cmd: dart test -j 1 --reporter expanded test/unit/peer_registry_cert_cache_test.dart
+[p6] start 2026-11-06 15:47:01
+[p6] end 2026-11-06 15:47:06 rc=1  cmd: dart test -j 1 test/unit/peer_registry_cert_cache_verifier_p6_test.dart; rc=$?; rm -f test/unit/peer_registry_cert_cache_verifier_p6_test.dart; exit $rc

@@ -1,0 +1,10 @@
+00:00 +0: loading test/security/zz_exp_detach_test.dart
+00:00 +0: E1 Socket + secureServer, then destroy() on the original socket after 1 s
+E1[destroy] client saw the server close within 4 s: false; handshake future: pending
+00:04 +1: E1 Socket + secureServer, then close() on the original socket after 1 s
+E1[close] client saw the server close within 4 s: false; handshake future: pending
+00:08 +2: E5 RawServerSocket + RawSecureSocket.secureServer, raw.close() after 1 s
+E5 client saw the server close within 4 s: true; handshake future: pending
+00:09 +3: E6 stalled handshake that is NOT touched: does dart close it by itself within 12 s?
+E6 untouched: client saw close within 12 s: false; handshake future: pending
+00:21 +4: All tests passed!

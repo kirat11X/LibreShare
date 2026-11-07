@@ -14,3 +14,16 @@ Re-greeting an already-listed same-fingerprint announce is forbidden by LSP-1 4.
 ## Risks
 - Up to 16 extra POSTs per contact per episode, only toward listed contacts; ~40 s window, then a documented limit.
 - Contact re-listed after removal: `_greeted` is cleared on removal, so a new greeting cycle starts.
+
+## Round 2 (2026-11-06 21:07): read-only test hooks
+Added to `LibreShareEngine` (all `@visibleForTesting`, `package:meta` already a core dependency; behaviour unchanged):
+- `int get greetingRetryPendingCount` (= `_greetRetry.length`)
+- `int get greetingRetryActiveTimerCount` (pending retry Timers with `isActive`)
+- `Set<String> get greetedFingerprints` (unmodifiable copy of `_greeted`)
+The verifier tests can replace their `dart:mirrors` reads (`retryMap(n).isNotEmpty` -> `n.engine.greetingRetryPendingCount > 0`; `greeted(n)` -> `n.engine.greetedFingerprints`; timers inactive after stop -> `greetingRetryActiveTimerCount == 0` and `greetingRetryPendingCount == 0`).
+Gates (clone, `packages/libreshare_core`): `dart analyze --fatal-infos lib` rc=0; `dart format --output=none --set-exit-if-changed` on the engine file rc=0; tester file under flock: `+5 ~1: All tests passed` (finished 21:07). The clone's test file now carries `skip:` on `regreet-after-restart` (DEFERRED, added by the orchestrator, not by me), so the run is green with 1 skipped instead of the earlier +5 -1. `patch -p1 --dry-run` on a copy of the real core: see apply-notes. No full-suite run this round.
+
+## Known limits (LOW findings, accepted)
+- Remove + re-add of a contact during an in-flight POST can leave two overlapping retry chains for a while (bounded by the 16-try cap).
+- Switching to Contacts-only does not re-greet the already-listed contacts (greeting is triggered by trust changes only).
+- Restart of a listed contact whose UDP reply is lost is not recovered (deferred Q4).

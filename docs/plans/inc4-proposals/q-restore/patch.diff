@@ -1,0 +1,194 @@
+diff --git a/apps/libreshare_app/test/receive_card_test.dart b/apps/libreshare_app/test/receive_card_test.dart
+index d472845..6991c1b 100644
+--- a/apps/libreshare_app/test/receive_card_test.dart
++++ b/apps/libreshare_app/test/receive_card_test.dart
+@@ -9,6 +9,7 @@ import 'package:libreshare_app/providers/settings_provider.dart';
+ import 'package:libreshare_core/libreshare_core.dart';
+ 
+ import 'helpers/harness.dart';
++import 'helpers/port_blocker.dart';
+ 
+ String status(WidgetTester tester) =>
+     tester.widget<Text>(find.byKey(const Key('receive-status'))).data!;
+@@ -269,7 +270,7 @@ void main() {
+       final blocker = await tester.runAsync(() async {
+         for (var p = 59871; ; p++) {
+           try {
+-            return await ServerSocket.bind(InternetAddress('127.0.0.2'), p);
++            return PortBlocker.bind(p, address: '127.0.0.2');
+           } on SocketException {
+             continue;
+           }
+diff --git a/packages/libreshare_core/test/integration/receive_mode_engine_test.dart b/packages/libreshare_core/test/integration/receive_mode_engine_test.dart
+index aba3a01..d6a4369 100644
+--- a/packages/libreshare_core/test/integration/receive_mode_engine_test.dart
++++ b/packages/libreshare_core/test/integration/receive_mode_engine_test.dart
+@@ -11,6 +11,7 @@ import 'package:path/path.dart' as p;
+ import 'package:test/test.dart';
+ 
+ import '../helpers/discovery_rig.dart';
++import '../helpers/port_blocker.dart';
+ import '../helpers/test_data.dart';
+ 
+ const _loop = '127.0.0.1';
+@@ -313,12 +314,9 @@ void main() {
+   });
+ 
+   test('start() rethrows the bind error when no port is free, and the engine stays usable', () async {
+-    ServerSocket blocker;
++    PortBlocker blocker;
+     try {
+-      blocker = await ServerSocket.bind(
+-        InternetAddress.loopbackIPv4,
+-        kPortFallbackMax,
+-      );
++      blocker = PortBlocker.bind(kPortFallbackMax);
+     } on SocketException {
+       markTestSkipped('port $kPortFallbackMax is in use on this host');
+       return;
+@@ -331,7 +329,7 @@ void main() {
+     expect(e.receive.state, isA<Failed>());
+     expect(e.isRunning, isFalse);
+ 
+-    await blocker.close();
++    blocker.close();
+     await e.receive.turnOn(const ReceiveAlways());
+     expect(e.receive.state, isA<On>());
+     expect(e.port, kPortFallbackMax);
+diff --git a/packages/libreshare_core/test/security/p5_review_test.dart b/packages/libreshare_core/test/security/p5_review_test.dart
+index b43614b..66da523 100644
+--- a/packages/libreshare_core/test/security/p5_review_test.dart
++++ b/packages/libreshare_core/test/security/p5_review_test.dart
+@@ -188,10 +188,14 @@ void main() {
+         final c = client(peer.port);
+         await c.info();
+         expect(c.serverFingerprint, peerA.identity.fingerprint);
++        final swapped = await RawTlsPeer.start(
++          peerB,
++          port: peer.port,
++          keepAlive: false,
++        );
++        open.add(swapped);
+         await peer.close();
+         open.remove(peer);
+-        final swapped = await RawTlsPeer.start(peerB, port: peer.port);
+-        open.add(swapped);
+         expect(
+           await errorOf(c.info()),
+           isA<PeerFingerprintMismatchException>(),
+diff --git a/packages/libreshare_core/test/unit/port_fallback_test.dart b/packages/libreshare_core/test/unit/port_fallback_test.dart
+index 9508487..72d10c1 100644
+--- a/packages/libreshare_core/test/unit/port_fallback_test.dart
++++ b/packages/libreshare_core/test/unit/port_fallback_test.dart
+@@ -6,10 +6,11 @@ import 'package:libreshare_core/libreshare_core.dart';
+ import 'package:test/test.dart';
+ 
+ import '../helpers/api_fake_handler.dart';
++import '../helpers/port_blocker.dart';
+ 
+ void main() {
+   late FakeIncomingHandler fake;
+-  final blockers = <ServerSocket>[];
++  final blockers = <dynamic>[];
+   final servers = <ApiServer>[];
+ 
+   setUp(() => fake = FakeIncomingHandler());
+@@ -41,8 +42,8 @@ void main() {
+     return s;
+   }
+ 
+-  Future<ServerSocket> occupy(int port) async {
+-    final s = await ServerSocket.bind(InternetAddress.anyIPv4, port);
++  dynamic occupy(int port) {
++    final s = PortBlocker.bind(port, address: '0.0.0.0');
+     blockers.add(s);
+     return s;
+   }
+@@ -50,25 +51,8 @@ void main() {
+   /// A base port P such that P..P+[count]-1 can all be bound right now, found
+   /// by probing, so the test never depends on fixed ports being free.
+   Future<int> findFreeRun(int count) async {
+-    for (var attempt = 0; attempt < 50; attempt++) {
+-      final probe = await ServerSocket.bind(InternetAddress.anyIPv4, 0);
+-      final base = probe.port;
+-      await probe.close();
+-      if (base + count >= 65000) continue;
+-      final taken = <ServerSocket>[];
+-      try {
+-        for (var i = 0; i < count; i++) {
+-          taken.add(await ServerSocket.bind(InternetAddress.anyIPv4, base + i));
+-        }
+-        return base;
+-      } on SocketException {
+-        // some port in the run is busy: try another base
+-      } finally {
+-        for (final t in taken) {
+-          await t.close();
+-        }
+-      }
+-    }
++    final base = PortBlocker.findFreeRun(count, address: '0.0.0.0');
++    if (base != null) return base;
+     fail('could not find $count consecutive free ports');
+   }
+ 
+diff --git a/packages/libreshare_core/test/unit/startup_test.dart b/packages/libreshare_core/test/unit/startup_test.dart
+index 26bcd8f..aa8ad87 100644
+--- a/packages/libreshare_core/test/unit/startup_test.dart
++++ b/packages/libreshare_core/test/unit/startup_test.dart
+@@ -10,6 +10,7 @@ import 'package:path/path.dart' as p;
+ import 'package:test/test.dart';
+ 
+ import '../helpers/discovery_rig.dart';
++import '../helpers/port_blocker.dart';
+ 
+ const _loop = '127.0.0.1';
+ 
+@@ -76,27 +77,8 @@ void main() {
+ 
+   /// A base port P such that P..P+2 can be bound right now.
+   Future<int> freeBase() async {
+-    for (var i = 0; i < 50; i++) {
+-      final probe = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+-      final base = probe.port;
+-      await probe.close();
+-      if (base + 3 > 65000) continue;
+-      final held = <ServerSocket>[];
+-      try {
+-        for (var k = 0; k < 3; k++) {
+-          held.add(
+-            await ServerSocket.bind(InternetAddress.loopbackIPv4, base + k),
+-          );
+-        }
+-      } on Object {
+-        continue;
+-      } finally {
+-        for (final s in held) {
+-          await s.close();
+-        }
+-      }
+-      return base;
+-    }
++    final base = PortBlocker.findFreeRun(3);
++    if (base != null) return base;
+     fail('no run of free ports');
+   }
+ 
+@@ -126,7 +108,7 @@ void main() {
+ 
+   test('FR-01: GET /info reports the port bound after a fallback, not the one asked for', () async {
+     final base = await freeBase();
+-    final blocker = await ServerSocket.bind(InternetAddress.loopbackIPv4, base);
++    final blocker = PortBlocker.bind(base);
+     addTearDown(blocker.close);
+ 
+     final e = engine('fallback', preferredPort: base);
+@@ -155,7 +137,7 @@ void main() {
+ 
+   test('POST /register answers with the bound port too', () async {
+     final base = await freeBase();
+-    final blocker = await ServerSocket.bind(InternetAddress.loopbackIPv4, base);
++    final blocker = PortBlocker.bind(base);
+     addTearDown(blocker.close);
+     final e = engine('reg', preferredPort: base);
+     final port = await e.start();

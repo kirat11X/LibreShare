@@ -11,3 +11,5 @@ timestamp,label,profile,size_mib,duration_sec,speed_mib_s,cpu_percent
 2026-11-06T10:37:11Z,loopback-lan,plain,100,5.41,18.5,136%
 2026-11-06T11:39:33Z,loopback-inc4,secure,100,6.61,15.1,128%
 2026-11-06T11:39:39Z,loopback-inc4,plain,100,5.19,19.3,140%
+2026-11-06T13:28:20Z,loopback-lan,secure,100,6.63,15.1,126%
+2026-11-06T13:28:26Z,loopback-lan,plain,100,5.22,19.2,139%

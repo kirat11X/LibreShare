@@ -1,5 +1,5 @@
---- a/packages/libreshare_core/lib/src/discovery/peer_registry.dart	2026-11-05 20:50:53.538680246 +0530
-+++ b/packages/libreshare_core/lib/src/discovery/peer_registry.dart	2026-11-06 12:13:17.136671237 +0530
+--- a/packages/libreshare_core/lib/src/discovery/peer_registry.dart	2026-11-06 16:53:32.330309011 +0530
++++ b/packages/libreshare_core/lib/src/discovery/peer_registry.dart	2026-11-06 20:52:09.386190451 +0530
 @@ -62,6 +62,15 @@
    final Map<String, Uint8List> _certs = {};
    static const int _maxCertMemory = 1024;
@@ -35,18 +35,23 @@
        }
        return true;
      } on Object {
-@@ -222,6 +237,27 @@
+@@ -222,6 +237,32 @@
      }
    }
  
-+  // Address of the listed peer that announced [fp]; a shared bucket otherwise.
++  // Address of the listed peer that announced [fp]; a shared bucket when the
++  // fingerprint is not listed or is claimed by more than one deviceId (a
++  // fingerprint is public, so a claim must not steer the attribution).
 +  String _sourceOf(String fp) {
-+    for (final e in _peers.values) {
-+      if (e.device.info.fingerprint.toUpperCase() == fp) {
-+        return e.device.address;
-+      }
++    String? address;
++    String? claimant;
++    for (final e in _peers.entries) {
++      if (e.value.device.info.fingerprint.toUpperCase() != fp) continue;
++      if (claimant != null && claimant != e.key) return _unknownSource;
++      claimant = e.key;
++      address ??= e.value.device.address;
 +    }
-+    return _unknownSource;
++    return address ?? _unknownSource;
 +  }
 +
 +  void _dropCert(String fp) {

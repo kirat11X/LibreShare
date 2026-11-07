@@ -28,6 +28,7 @@ import 'package:logging/logging.dart';
 import 'package:meta/meta.dart';
 
 import '../security/contracts.dart';
+import 'atomic_file.dart';
 
 final Logger _log = Logger('libreshare.storage.secret');
 
@@ -78,33 +79,14 @@ Future<int> _systemChmod(String mode, String path) async {
 /// `.tmp` from an earlier crash is overwritten and never read. [prepareTmp]
 /// runs on the (still empty) temporary file before any byte is written, which
 /// is where permissions are applied so content is never briefly world-readable.
-/// Single writer per [target] is assumed; callers serialise.
+/// Delegates to [atomicWriteBytes] (writers to one target are serialised).
 @internal
 Future<void> writeFileAtomically(
   File target,
   List<int> data, {
   Future<void> Function(File tmp)? prepareTmp,
 }) async {
-  final tmp = File('${target.path}.tmp');
-  try {
-    await tmp.create();
-    if (prepareTmp != null) await prepareTmp(tmp);
-    final raf = await tmp.open(mode: FileMode.write);
-    try {
-      await raf.writeFrom(data);
-      await raf.flush();
-    } finally {
-      await raf.close();
-    }
-    await tmp.rename(target.path);
-  } on Object {
-    try {
-      await tmp.delete();
-    } on Object {
-      // best effort: the temporary file is never read anyway
-    }
-    rethrow;
-  }
+  await atomicWriteBytes(target, data, prepareTmp: prepareTmp);
 }
 
 // File framing: "LSS1" | u32be length | payload | SHA-256(everything before).

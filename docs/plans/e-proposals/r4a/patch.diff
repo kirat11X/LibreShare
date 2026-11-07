@@ -1,5 +1,6 @@
---- a/packages/libreshare_core/lib/src/server/api_server.dart	2026-11-05 16:27:09.071482458 +0530
-+++ b/packages/libreshare_core/lib/src/server/api_server.dart	2026-11-06 12:13:35.868088135 +0530
+diff -ruN a/packages/libreshare_core/lib/src/server/api_server.dart b/packages/libreshare_core/lib/src/server/api_server.dart
+--- a/packages/libreshare_core/lib/src/server/api_server.dart	2026-11-06 21:59:37.377265260 +0530
++++ b/packages/libreshare_core/lib/src/server/api_server.dart	2026-11-06 21:59:37.379129821 +0530
 @@ -31,6 +31,7 @@
  import '../security/crypto_primitives.dart' show b64urlDecode;
  import '../security/identity_proof.dart';
@@ -8,16 +9,17 @@
  import 'incoming_transfer_handler.dart';
  import 'rate_limiter.dart';
  
-@@ -89,6 +90,8 @@
+@@ -89,6 +90,9 @@
      this.bodyIdleTimeout = const Duration(seconds: 5),
      RateLimiter? rateLimiter,
      this.onRegister,
 +    this.maxConnections = 64,
 +    this.maxConnectionsPerIp = 16,
++    this.tlsHandshakeTimeout = kDefaultHandshakeTimeout,
    }) : bindAddress = bindAddress ?? InternetAddress.anyIPv4,
         _rateLimiter = rateLimiter ?? RateLimiter() {
      if (security.isSecure && handler is! SecureTransferHandler) {
-@@ -127,6 +130,13 @@
+@@ -127,6 +131,16 @@
    /// Evaluated per request: true = Contacts-only visibility, strangers get the plain 404.
    final bool Function()? contactsOnly;
  
@@ -28,10 +30,13 @@
 +  /// Most open TCP connections of one remote address (same rule as [maxConnections]).
 +  final int maxConnectionsPerIp;
 +
++  /// A TLS handshake still unfinished after this long is dropped (frees its connection slot).
++  final Duration tlsHandshakeTimeout;
++
    /// Interface to bind (default: all IPv4 interfaces).
    final InternetAddress bindAddress;
  
-@@ -171,6 +181,8 @@
+@@ -171,6 +185,8 @@
    /// Listener already closed by a graceful [stop]; connections may still be
    /// draining. Kept so a later `stop(force: true)` can escalate.
    HttpServer? _closing;
@@ -40,7 +45,7 @@
  
    int _inFlight = 0;
    Completer<void>? _drained;
-@@ -194,7 +206,15 @@
+@@ -194,7 +210,15 @@
          : math.max(preferredPort, maxPortFallback);
      for (var p = preferredPort; ; p++) {
        try {
@@ -57,7 +62,7 @@
          server.listen(
            _onRequest,
            onError: (Object e) =>
-@@ -228,14 +248,20 @@
+@@ -228,14 +252,20 @@
      if (running != null) {
        _server = null;
        _closing = running;
@@ -78,7 +83,7 @@
      if (_inFlight > 0) {
        await (_drained ??= Completer<void>()).future;
      }
-@@ -252,22 +278,19 @@
+@@ -252,22 +282,20 @@
      }
    }
  
@@ -107,18 +112,23 @@
 -      requestClientCertificate: requestClientCertificate,
 +      maxConnections: maxConnections,
 +      maxConnectionsPerIp: maxConnectionsPerIp,
++      handshakeTimeout: tlsHandshakeTimeout,
 +      securityContext: ctx,
 +      requestClientCertificate: !_secure && requestClientCertificate,
      );
    }
  
+diff -ruN a/packages/libreshare_core/lib/src/server/capped_server_socket.dart b/packages/libreshare_core/lib/src/server/capped_server_socket.dart
 --- a/packages/libreshare_core/lib/src/server/capped_server_socket.dart	1970-01-01 05:30:00.000000000 +0530
-+++ b/packages/libreshare_core/lib/src/server/capped_server_socket.dart	1970-01-01 05:30:00.000000000 +0530
-@@ -0,0 +1,267 @@
++++ b/packages/libreshare_core/lib/src/server/capped_server_socket.dart	2026-11-06 21:59:37.379521212 +0530
+@@ -0,0 +1,334 @@
 +import 'dart:async';
 +import 'dart:convert';
 +import 'dart:io';
 +import 'dart:typed_data';
++
++/// How long a TLS handshake may take before the socket is destroyed and its slot freed.
++const Duration kDefaultHandshakeTimeout = Duration(seconds: 10);
 +
 +/// A [ServerSocket] that limits open TCP connections (total and per remote address) at socket
 +/// level, so half-sent request heads and unfinished TLS handshakes count too. `dart:io`'s
@@ -135,6 +145,7 @@
 +    this._maxPerIp,
 +    this._context,
 +    this._requestClientCertificate,
++    this._handshakeTimeout,
 +    StreamController<Socket> out,
 +  ) : _out = out,
 +      super(out.stream) {
@@ -150,6 +161,7 @@
 +    required int maxConnectionsPerIp,
 +    SecurityContext? securityContext,
 +    bool requestClientCertificate = false,
++    Duration handshakeTimeout = kDefaultHandshakeTimeout,
 +  }) async {
 +    final raw = await ServerSocket.bind(address, port);
 +    return CappedServerSocket._(
@@ -158,6 +170,7 @@
 +      maxConnectionsPerIp,
 +      securityContext,
 +      requestClientCertificate,
++      handshakeTimeout,
 +      StreamController<Socket>(sync: true),
 +    );
 +  }
@@ -167,6 +180,8 @@
 +  final int _maxPerIp;
 +  final SecurityContext? _context;
 +  final bool _requestClientCertificate;
++  final Duration _handshakeTimeout;
++  final Set<Socket> _pending = <Socket>{};
 +  final StreamController<Socket> _out;
 +  StreamSubscription<Socket>? _sub;
 +  final Set<_TrackedSocket> _open = <_TrackedSocket>{};
@@ -221,13 +236,39 @@
 +      return;
 +    }
 +    _handshaking++;
-+    SecureSocket.secureServer(
-+      socket,
-+      ctx,
-+      requestClientCertificate: _requestClientCertificate,
-+    ).then<void>(
-+      (secure) {
++    _pending.add(socket);
++    var finished = false;
++    void fail() {
++      if (finished) return;
++      finished = true;
++      _handshaking--;
++      _pending.remove(socket);
++      socket.destroy();
++      release();
++    }
++
++    // Phase 1 (the plain socket can still be destroyed): the client must deliver a whole first
++    // TLS record within the timeout. Phase 2: secureServer takes the fd over and cannot be
++    // aborted any more, so the slot stays counted until it settles.
++    _readFirstRecord(socket, _handshakeTimeout).then<void>((record) {
++      if (finished) return;
++      if (record == null) {
++        fail();
++        return;
++      }
++      SecureSocket.secureServer(
++        socket,
++        ctx,
++        bufferedData: record,
++        requestClientCertificate: _requestClientCertificate,
++      ).then<void>((secure) {
++        if (finished) {
++          secure.destroy();
++          return;
++        }
++        finished = true;
 +        _handshaking--;
++        _pending.remove(socket);
 +        if (_closed) {
 +          secure.destroy();
 +          release();
@@ -240,13 +281,8 @@
 +        });
 +        _open.add(tracked);
 +        _emit(tracked);
-+      },
-+      onError: (Object _) {
-+        _handshaking--;
-+        socket.destroy();
-+        release();
-+      },
-+    );
++      }, onError: (Object _) => fail());
++    });
 +  }
 +
 +  void _emit(Socket s) {
@@ -272,25 +308,25 @@
 +    for (final s in _open.toList()) {
 +      s.destroy();
 +    }
++    // Sockets still in the TLS handshake: destroying fails the handshake, which frees the slot.
++    for (final s in _pending.toList()) {
++      s.destroy();
++    }
 +  }
 +}
 +
 +/// Wraps a [Socket] and calls [_onClosed] once when it ends. `Socket.done` is not reliable for
 +/// this (it can stay pending after the peer closed or after `destroy`), so the end is taken from
-+/// the read side (done or error), `destroy` and `close`.
++/// `destroy` and `close` (not from the read side: a half-closed peer is still being served).
 +class _TrackedSocket extends StreamView<Uint8List> implements Socket {
 +  _TrackedSocket(this._inner, this._onClosed)
 +    : super(
 +        _inner.transform(
 +          StreamTransformer<Uint8List, Uint8List>.fromHandlers(
-+            handleError: (e, st, sink) {
-+              _onClosed();
-+              sink.addError(e, st);
-+            },
-+            handleDone: (sink) {
-+              _onClosed();
-+              sink.close();
-+            },
++            // No release here: a peer that half-closes (FIN) after its request is still being
++            // served. The slot is freed only by destroy/close of the socket itself.
++            handleError: (e, st, sink) => sink.addError(e, st),
++            handleDone: (sink) => sink.close(),
 +          ),
 +        ),
 +      );
@@ -381,4 +417,42 @@
 +        requestClientCertificate: requestClientCertificate,
 +        requireClientCertificate: requireClientCertificate,
 +      );
++}
++
++/// Reads from [s] until one whole TLS record is buffered (at most 16.6 KB). Null on timeout, close,
++/// error or a first byte that is not a TLS handshake record. The subscription is left paused.
++Future<Uint8List?> _readFirstRecord(Socket s, Duration timeout) {
++  final done = Completer<Uint8List?>();
++  final buf = BytesBuilder(copy: false);
++  final timer = Timer(timeout, () {
++    if (!done.isCompleted) done.complete(null);
++  });
++  final sub = s.listen(
++    (d) {
++      buf.add(d);
++      final b = buf.toBytes();
++      if (b[0] != 0x16) {
++        if (!done.isCompleted) done.complete(null);
++        return;
++      }
++      if (b.length >= 5) {
++        final len = (b[3] << 8) | b[4];
++        if (len > 16640) {
++          if (!done.isCompleted) done.complete(null);
++        } else if (b.length >= 5 + len && !done.isCompleted) {
++          done.complete(b);
++        }
++      }
++    },
++    onDone: () {
++      if (!done.isCompleted) done.complete(null);
++    },
++    onError: (Object _) {
++      if (!done.isCompleted) done.complete(null);
++    },
++  );
++  return done.future.whenComplete(() {
++    timer.cancel();
++    sub.pause();
++  });
 +}

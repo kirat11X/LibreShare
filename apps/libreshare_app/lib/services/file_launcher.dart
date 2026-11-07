@@ -16,6 +16,48 @@ abstract interface class FileLauncher {
   Future<bool> showInFolder(String path);
 }
 
+/// A process to start: [executable] with [arguments] (one list element per
+/// argument; Dart quotes them for the platform).
+class LaunchCommand {
+  const LaunchCommand(this.executable, this.arguments);
+
+  final String executable;
+  final List<String> arguments;
+}
+
+/// The command that opens [path] with the default application, or null when
+/// [platform] (`Platform.operatingSystem`) has no process launcher.
+LaunchCommand? openCommand(String path, {required String platform}) {
+  switch (platform) {
+    case 'linux':
+      return LaunchCommand('xdg-open', [path]);
+    case 'windows':
+      return LaunchCommand('rundll32', [
+        'url.dll,FileProtocolHandler',
+        path.replaceAll('/', r'\'),
+      ]);
+    case 'macos':
+      return LaunchCommand('open', [path]);
+  }
+  return null;
+}
+
+/// The command that reveals [path] in the file manager, or null.
+LaunchCommand? showInFolderCommand(String path, {required String platform}) {
+  switch (platform) {
+    case 'linux':
+      return LaunchCommand('xdg-open', [parentDir(path)]);
+    case 'windows':
+      return LaunchCommand('explorer.exe', [
+        '/select,',
+        path.replaceAll('/', r'\'),
+      ]);
+    case 'macos':
+      return LaunchCommand('open', ['-R', path]);
+  }
+  return null;
+}
+
 /// Uses `xdg-open` (Linux), `rundll32`/`explorer` (Windows), `open` (macOS).
 /// Android and iOS have no equivalent without a plugin: returns false and the
 /// UI shows where the file is.
@@ -23,26 +65,21 @@ class SystemFileLauncher implements FileLauncher {
   const SystemFileLauncher();
 
   @override
-  Future<bool> open(String path) async {
-    if (Platform.isLinux) return _start('xdg-open', [path]);
-    if (Platform.isWindows) {
-      return _start('rundll32', ['url.dll,FileProtocolHandler', path]);
-    }
-    if (Platform.isMacOS) return _start('open', [path]);
-    return false;
-  }
+  Future<bool> open(String path) =>
+      _start(openCommand(path, platform: Platform.operatingSystem));
 
   @override
-  Future<bool> showInFolder(String path) async {
-    if (Platform.isLinux) return _start('xdg-open', [parentDir(path)]);
-    if (Platform.isWindows) return _start('explorer.exe', ['/select,$path']);
-    if (Platform.isMacOS) return _start('open', ['-R', path]);
-    return false;
-  }
+  Future<bool> showInFolder(String path) =>
+      _start(showInFolderCommand(path, platform: Platform.operatingSystem));
 
-  Future<bool> _start(String exe, List<String> args) async {
+  Future<bool> _start(LaunchCommand? cmd) async {
+    if (cmd == null) return false;
     try {
-      await Process.start(exe, args, mode: ProcessStartMode.detached);
+      await Process.start(
+        cmd.executable,
+        cmd.arguments,
+        mode: ProcessStartMode.detached,
+      );
       return true;
     } on Object {
       return false;

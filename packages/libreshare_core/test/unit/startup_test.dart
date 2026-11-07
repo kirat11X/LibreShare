@@ -10,6 +10,7 @@ import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
 import '../helpers/discovery_rig.dart';
+import '../helpers/port_blocker.dart';
 
 const _loop = '127.0.0.1';
 
@@ -76,27 +77,8 @@ void main() {
 
   /// A base port P such that P..P+2 can be bound right now.
   Future<int> freeBase() async {
-    for (var i = 0; i < 50; i++) {
-      final probe = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
-      final base = probe.port;
-      await probe.close();
-      if (base + 3 > 65000) continue;
-      final held = <ServerSocket>[];
-      try {
-        for (var k = 0; k < 3; k++) {
-          held.add(
-            await ServerSocket.bind(InternetAddress.loopbackIPv4, base + k),
-          );
-        }
-      } on Object {
-        continue;
-      } finally {
-        for (final s in held) {
-          await s.close();
-        }
-      }
-      return base;
-    }
+    final base = PortBlocker.findFreeRun(3);
+    if (base != null) return base;
     fail('no run of free ports');
   }
 
@@ -126,7 +108,7 @@ void main() {
 
   test('FR-01: GET /info reports the port bound after a fallback, not the one asked for', () async {
     final base = await freeBase();
-    final blocker = await ServerSocket.bind(InternetAddress.loopbackIPv4, base);
+    final blocker = PortBlocker.bind(base);
     addTearDown(blocker.close);
 
     final e = engine('fallback', preferredPort: base);
@@ -155,7 +137,7 @@ void main() {
 
   test('POST /register answers with the bound port too', () async {
     final base = await freeBase();
-    final blocker = await ServerSocket.bind(InternetAddress.loopbackIPv4, base);
+    final blocker = PortBlocker.bind(base);
     addTearDown(blocker.close);
     final e = engine('reg', preferredPort: base);
     final port = await e.start();

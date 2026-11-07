@@ -1,6 +1,2306 @@
+--- a/packages/libreshare_core/lib/libreshare_core.dart	2026-11-06 16:53:32.329309013 +0530
++++ b/packages/libreshare_core/lib/libreshare_core.dart	2026-11-05 19:01:24.120782537 +0530
+@@ -72,14 +72,3 @@
+ export 'src/security/pin_guard.dart';
+ export 'src/security/pairing_service.dart';
+ export 'src/client/peer_security_exceptions.dart';
+-export 'src/connection/candidate.dart';
+-export 'src/connection/connection.dart';
+-export 'src/connection/connection_manager.dart';
+-export 'src/connection/http_connection.dart';
+-export 'src/monitor/channel_event.dart';
+-export 'src/monitor/event_record.dart' hide shortFingerprint;
+-export 'src/monitor/event_log.dart';
+-export 'src/storage/session_record.dart';
+-export 'src/storage/session_store.dart';
+-export 'src/transfer/idle_timeout_manager.dart';
+-export 'src/transfer/receiver_adoption_helper.dart';
+--- a/packages/libreshare_core/lib/src/connection/candidate.dart	2026-11-06 17:15:38.282137606 +0530
++++ b/packages/libreshare_core/lib/src/connection/candidate.dart	1970-01-01 05:30:00.000000000 +0530
+@@ -1,245 +0,0 @@
+-/// Candidate endpoint representation for the LibreShare Connection Ladder (Increment 4).
+-///
+-/// Models a concrete network path candidate for establishing a secure peer connection.
+-/// Candidates are ranked according to cost hints, historical success, and measured RTT.
+-///
+-/// Security Invariant: Every candidate carries the pinned [peerFingerprint]. A connection
+-/// attempt MUST verify that the presented certificate matches this fingerprint before
+-/// any plaintext data or authenticated request is transmitted.
+-library;
+-
+-/// Classification of candidate network paths according to ADR 0002.
+-enum CandidateKind {
+-  /// Direct mTLS connection over shared WLAN or local hotspot.
+-  wifi('wifi', defaultCostHint: 10),
+-
+-  /// Other local network paths (Ethernet, second NIC, other private subnet).
+-  lan('lan', defaultCostHint: 20),
+-
+-  /// User-specified or QR-scanned manual address.
+-  manual('manual', defaultCostHint: 30),
+-
+-  /// Local loopback connection (tests, local development).
+-  loopback('loopback', defaultCostHint: 5),
+-
+-  /// Encrypted relay tunnel (reserved for Increment 5).
+-  tunnel('tunnel', defaultCostHint: 100);
+-
+-  const CandidateKind(this.wire, {required this.defaultCostHint});
+-
+-  /// Wire format identifier used in JSON serialization and protocol messages.
+-  final String wire;
+-
+-  /// Default cost metric (lower is cheaper/preferred).
+-  final int defaultCostHint;
+-
+-  /// Whether this path is local network / direct rather than relayed.
+-  bool get isLocal => this != CandidateKind.tunnel;
+-
+-  /// Resolves [wire] to a [CandidateKind], throwing [ArgumentError] if unknown.
+-  static CandidateKind fromWire(String wire) {
+-    for (final kind in CandidateKind.values) {
+-      if (kind.wire == wire) return kind;
+-    }
+-    throw ArgumentError.value(wire, 'wire', 'Unknown candidate kind');
+-  }
+-}
+-
+-/// A network path candidate for peer communication.
+-class Candidate implements Comparable<Candidate> {
+-  const Candidate({
+-    required this.id,
+-    required this.kind,
+-    required this.host,
+-    required this.port,
+-    required this.peerFingerprint,
+-    required this.costHint,
+-    this.lastSuccess,
+-    this.rtt,
+-  }) : assert(port > 0 && port <= 65535, 'port must be between 1 and 65535'),
+-       assert(host.length > 0, 'host must not be empty');
+-
+-  /// Helper factory that auto-computes [id] and [costHint] if omitted.
+-  factory Candidate.create({
+-    required CandidateKind kind,
+-    required String host,
+-    required int port,
+-    required String peerFingerprint,
+-    String? id,
+-    int? costHint,
+-    DateTime? lastSuccess,
+-    Duration? rtt,
+-  }) {
+-    final candidateId = id ?? '${kind.wire}:$host:$port';
+-    final candidateCost = costHint ?? kind.defaultCostHint;
+-    return Candidate(
+-      id: candidateId,
+-      kind: kind,
+-      host: host,
+-      port: port,
+-      peerFingerprint: peerFingerprint,
+-      costHint: candidateCost,
+-      lastSuccess: lastSuccess,
+-      rtt: rtt,
+-    );
+-  }
+-
+-  /// Unique identifier for this candidate (e.g. "wifi:192.168.1.15:45454").
+-  final String id;
+-
+-  /// Path classification tier.
+-  final CandidateKind kind;
+-
+-  /// IP address or hostname.
+-  final String host;
+-
+-  /// TCP / TLS listening port (1..65535).
+-  final int port;
+-
+-  /// SHA-256 certificate fingerprint (hex string) pinned for this peer.
+-  ///
+-  /// Invariant: Any TLS connection via this candidate MUST present a certificate
+-  /// whose SHA-256 fingerprint matches this value.
+-  final String peerFingerprint;
+-
+-  /// Cost metric (lower is preferred/cheaper).
+-  final int costHint;
+-
+-  /// Timestamp of the last successful request or probe through this candidate.
+-  final DateTime? lastSuccess;
+-
+-  /// Most recently measured round-trip time.
+-  final Duration? rtt;
+-
+-  /// Verifies that [presentedFingerprint] matches [peerFingerprint].
+-  ///
+-  /// Performs case-insensitive comparison ignoring any optional colon delimiters.
+-  bool matchesFingerprint(String presentedFingerprint) {
+-    if (peerFingerprint.isEmpty) return true;
+-    final cleanPresented = presentedFingerprint
+-        .replaceAll(':', '')
+-        .trim()
+-        .toLowerCase();
+-    final cleanPinned = peerFingerprint
+-        .replaceAll(':', '')
+-        .trim()
+-        .toLowerCase();
+-    return cleanPresented.isNotEmpty && cleanPresented == cleanPinned;
+-  }
+-
+-  /// Creates a copy of this candidate with updated properties.
+-  Candidate copyWith({
+-    String? id,
+-    CandidateKind? kind,
+-    String? host,
+-    int? port,
+-    String? peerFingerprint,
+-    int? costHint,
+-    DateTime? lastSuccess,
+-    Duration? rtt,
+-  }) {
+-    return Candidate(
+-      id: id ?? this.id,
+-      kind: kind ?? this.kind,
+-      host: host ?? this.host,
+-      port: port ?? this.port,
+-      peerFingerprint: peerFingerprint ?? this.peerFingerprint,
+-      costHint: costHint ?? this.costHint,
+-      lastSuccess: lastSuccess ?? this.lastSuccess,
+-      rtt: rtt ?? this.rtt,
+-    );
+-  }
+-
+-  /// Serializes this candidate to JSON.
+-  Map<String, Object?> toJson() => {
+-    'id': id,
+-    'kind': kind.wire,
+-    'host': host,
+-    'port': port,
+-    'peerFingerprint': peerFingerprint,
+-    'costHint': costHint,
+-    if (lastSuccess != null)
+-      'lastSuccess': lastSuccess!.toUtc().toIso8601String(),
+-    if (rtt != null) 'rttMs': rtt!.inMilliseconds,
+-  };
+-
+-  /// Deserializes a candidate from JSON.
+-  factory Candidate.fromJson(Map<String, Object?> json) {
+-    final kind = CandidateKind.fromWire(json['kind']! as String);
+-    return Candidate(
+-      id: json['id']! as String,
+-      kind: kind,
+-      host: json['host']! as String,
+-      port: json['port']! as int,
+-      peerFingerprint: json['peerFingerprint']! as String,
+-      costHint: (json['costHint'] as int?) ?? kind.defaultCostHint,
+-      lastSuccess: json['lastSuccess'] != null
+-          ? DateTime.parse(json['lastSuccess']! as String)
+-          : null,
+-      rtt: json['rttMs'] != null
+-          ? Duration(milliseconds: json['rttMs']! as int)
+-          : null,
+-    );
+-  }
+-
+-  /// Compares candidates for connection ladder preference:
+-  /// 1. Lower [costHint] first.
+-  /// 2. More recent [lastSuccess] first.
+-  /// 3. Lower [rtt] first (unmeasured RTT placed after measured).
+-  /// 4. Lexicographical tie-breaker on [id].
+-  @override
+-  int compareTo(Candidate other) {
+-    final costCmp = costHint.compareTo(other.costHint);
+-    if (costCmp != 0) return costCmp;
+-
+-    if (lastSuccess != null && other.lastSuccess != null) {
+-      final successCmp = other.lastSuccess!.compareTo(lastSuccess!);
+-      if (successCmp != 0) return successCmp;
+-    } else if (lastSuccess != null) {
+-      return -1;
+-    } else if (other.lastSuccess != null) {
+-      return 1;
+-    }
+-
+-    if (rtt != null && other.rtt != null) {
+-      final rttCmp = rtt!.compareTo(other.rtt!);
+-      if (rttCmp != 0) return rttCmp;
+-    } else if (rtt != null) {
+-      return -1;
+-    } else if (other.rtt != null) {
+-      return 1;
+-    }
+-
+-    return id.compareTo(other.id);
+-  }
+-
+-  @override
+-  bool operator ==(Object other) =>
+-      identical(this, other) ||
+-      other is Candidate &&
+-          runtimeType == other.runtimeType &&
+-          id == other.id &&
+-          kind == other.kind &&
+-          host == other.host &&
+-          port == other.port &&
+-          peerFingerprint == other.peerFingerprint &&
+-          costHint == other.costHint &&
+-          lastSuccess == other.lastSuccess &&
+-          rtt == other.rtt;
+-
+-  @override
+-  int get hashCode => Object.hash(
+-    id,
+-    kind,
+-    host,
+-    port,
+-    peerFingerprint,
+-    costHint,
+-    lastSuccess,
+-    rtt,
+-  );
+-
+-  @override
+-  String toString() =>
+-      'Candidate($id, kind=$kind, host=$host:$port, cost=$costHint, rtt=${rtt?.inMilliseconds}ms)';
+-}
+--- a/packages/libreshare_core/lib/src/connection/connection.dart	2026-11-06 16:53:32.331309008 +0530
++++ b/packages/libreshare_core/lib/src/connection/connection.dart	1970-01-01 05:30:00.000000000 +0530
+@@ -1,104 +0,0 @@
+-/// Connection abstraction for the LibreShare Connection Ladder (Increment 4).
+-///
+-/// Encapsulates a bidirectional communications channel to a peer along a specific [Candidate] path.
+-/// Concrete subclasses implement transport-specific protocols (e.g. WiFiConnection, LANConnection,
+-/// and future TunnelConnection).
+-library;
+-
+-import 'dart:async';
+-
+-import '../client/peer_client.dart';
+-import 'candidate.dart';
+-
+-/// Connection lifecycle states.
+-enum ConnectionState {
+-  /// The connection has not been opened yet, or was closed cleanly.
+-  disconnected,
+-
+-  /// Actively establishing TCP socket and performing TLS 1.3 handshake.
+-  connecting,
+-
+-  /// Established, certificate pinned and validated, ready for bidirectional transfer.
+-  connected,
+-
+-  /// Terminated cleanly by either peer.
+-  closed,
+-
+-  /// Aborted due to I/O error, handshake failure, or pinned cert mismatch.
+-  failed,
+-}
+-
+-/// Abstract interface representing a physical or virtual communication channel
+-/// bound to a specific candidate network path.
+-abstract interface class Connection {
+-  /// The candidate network path associated with this connection.
+-  Candidate get candidate;
+-
+-  /// Current lifecycle state of this connection.
+-  ConnectionState get state;
+-
+-  /// Whether the channel is active, healthy, and capable of transmitting data.
+-  bool get isHealthy;
+-
+-  /// Most recently observed round-trip latency on this connection.
+-  Duration? get latency;
+-
+-  /// Opens the path and returns a client bound to this candidate; on the secure profile the TLS
+-  /// pin is candidate.peerFingerprint. A mismatch throws FingerprintMismatchException, the candidate is demoted and NEVER used.
+-  Future<PeerClient> open({Duration? timeout});
+-
+-  /// Gracefully terminates the connection and releases socket resources.
+-  Future<void> close();
+-}
+-
+-/// Base exception for connection failures and ladder transport errors.
+-class ConnectionException implements Exception {
+-  const ConnectionException(this.message, {this.candidate, this.cause});
+-
+-  final String message;
+-  final Candidate? candidate;
+-  final Object? cause;
+-
+-  @override
+-  String toString() =>
+-      'ConnectionException: $message'
+-      '${candidate != null ? ' (candidate: ${candidate!.id})' : ''}'
+-      '${cause != null ? ' caused by: $cause' : ''}';
+-}
+-
+-/// Thrown when connecting, handshaking, or sending exceeds an allocated timeout budget.
+-class ConnectionTimeoutException extends ConnectionException {
+-  const ConnectionTimeoutException(
+-    super.message, {
+-    super.candidate,
+-    super.cause,
+-  });
+-}
+-
+-/// Thrown when the remote certificate presented during TLS handshake does not match
+-/// the candidate's pinned [Candidate.peerFingerprint].
+-///
+-/// Security: Truncates fingerprints to 16 hex characters in toString to prevent secret leaks.
+-class FingerprintMismatchException extends ConnectionException {
+-  const FingerprintMismatchException({
+-    required this.expectedFingerprint,
+-    required this.presentedFingerprint,
+-    super.candidate,
+-  }) : super(
+-         'Presented certificate fingerprint does not match pinned peer identity',
+-       );
+-
+-  final String expectedFingerprint;
+-  final String presentedFingerprint;
+-
+-  @override
+-  String toString() =>
+-      'FingerprintMismatchException: $message '
+-      '(expected: ${_shortFp(expectedFingerprint)}, '
+-      'presented: ${_shortFp(presentedFingerprint)})';
+-
+-  static String _shortFp(String fp) {
+-    final clean = fp.replaceAll(':', '');
+-    return clean.length > 16 ? clean.substring(0, 16) : clean;
+-  }
+-}
+--- a/packages/libreshare_core/lib/src/connection/connection_manager.dart	2026-11-06 16:53:32.331309008 +0530
++++ b/packages/libreshare_core/lib/src/connection/connection_manager.dart	1970-01-01 05:30:00.000000000 +0530
+@@ -1,181 +0,0 @@
+-import 'dart:async';
+-
+-import 'package:logging/logging.dart';
+-
+-import '../client/peer_client.dart';
+-import '../monitor/channel_event.dart';
+-import '../monitor/event_log.dart';
+-import '../security/contracts.dart';
+-import 'candidate.dart';
+-import 'connection.dart';
+-import 'http_connection.dart';
+-
+-final Logger _log = Logger('ConnectionManager');
+-
+-/// Connection ladder manager for Increment 4 (ADR 0002).
+-///
+-/// Orchestrates candidate selection, health monitoring, tier transitions,
+-/// and fallback while enforcing pin continuity across all network paths.
+-class ConnectionManager {
+-  ConnectionManager({
+-    required List<Candidate> candidates,
+-    this.security = const SecurityConfig.plaintext(),
+-    this.tierBudget = const Duration(seconds: 8),
+-    this.connectionFactory,
+-    this.eventLog,
+-    this.pinnedFingerprint,
+-    this.enableFallback = true,
+-  }) {
+-    _candidates = List<Candidate>.of(candidates)..sort();
+-    if (_candidates.isEmpty) {
+-      throw ArgumentError.value(candidates, 'candidates', 'Must not be empty');
+-    }
+-    // Verify pin continuity across candidates if pinnedFingerprint is specified
+-    final pin = pinnedFingerprint;
+-    if (pin != null && pin.isNotEmpty) {
+-      for (final c in _candidates) {
+-        if (!c.matchesFingerprint(pin)) {
+-          throw FingerprintMismatchException(
+-            expectedFingerprint: pin,
+-            presentedFingerprint: c.peerFingerprint,
+-            candidate: c,
+-          );
+-        }
+-      }
+-    }
+-  }
+-
+-  final SecurityConfig security;
+-  final Duration tierBudget;
+-  final Connection Function(Candidate candidate, SecurityConfig security)?
+-  connectionFactory;
+-  final EventLog? eventLog;
+-  final String? pinnedFingerprint;
+-  final bool enableFallback;
+-
+-  late final List<Candidate> _candidates;
+-  int _currentIndex = 0;
+-  Connection? _activeConnection;
+-  PeerClient? _activeClient;
+-  final _eventController = StreamController<ChannelEvent>.broadcast();
+-
+-  List<Candidate> get candidates => List.unmodifiable(_candidates);
+-  Candidate? get activeCandidate => _activeConnection?.candidate;
+-  Connection? get activeConnection => _activeConnection;
+-  PeerClient? get activeClient => _activeClient;
+-  Stream<ChannelEvent> get events => _eventController.stream;
+-
+-  /// Connects to the highest priority viable candidate within the ladder.
+-  Future<PeerClient> connect({Duration? timeout}) async {
+-    final failures = <Object>[];
+-
+-    for (var i = 0; i < _candidates.length; i++) {
+-      _currentIndex = i;
+-      final candidate = _candidates[i];
+-
+-      final conn = connectionFactory != null
+-          ? connectionFactory!(candidate, security)
+-          : HttpConnection(candidate: candidate, security: security);
+-
+-      final budget = timeout ?? tierBudget;
+-      try {
+-        _log.info(
+-          'Attempting ladder connection to candidate: ${candidate.id} (cost: ${candidate.costHint})',
+-        );
+-        final client = await conn.open(timeout: budget);
+-
+-        _activeConnection = conn;
+-        _activeClient = client;
+-
+-        final event = ChannelActive(
+-          candidate: candidate,
+-          rtt: conn.latency ?? Duration.zero,
+-          timestamp: DateTime.now().toUtc(),
+-        );
+-        _eventController.add(event);
+-        unawaited(eventLog?.logChannel(event));
+-
+-        return client;
+-      } on Object catch (e) {
+-        failures.add(e);
+-        _log.warning('Candidate ${candidate.id} failed: $e');
+-
+-        final failedEvent = ChannelFailed(
+-          candidate: candidate,
+-          reason: e.toString(),
+-          error: e,
+-          consecutiveFailures: 1,
+-          timestamp: DateTime.now().toUtc(),
+-        );
+-        _eventController.add(failedEvent);
+-        unawaited(eventLog?.logChannel(failedEvent));
+-        await conn.close();
+-        if (!enableFallback) {
+-          throw ConnectionException(
+-            'Candidate ${candidate.id} failed and fallback is disabled: $e',
+-          );
+-        }
+-      }
+-    }
+-
+-    throw ConnectionException(
+-      'All ${_candidates.length} candidates failed in connection ladder: $failures',
+-    );
+-  }
+-
+-  /// Falls back to the next candidate in the ladder after a connection degradation or failure.
+-  Future<PeerClient> fallbackToNext({String reason = 'fallback'}) async {
+-    final prevCandidate = activeCandidate;
+-    if (_activeConnection != null) {
+-      await _activeConnection!.close();
+-      _activeConnection = null;
+-      _activeClient = null;
+-    }
+-
+-    final nextIndex = _currentIndex + 1;
+-    if (nextIndex >= _candidates.length) {
+-      throw ConnectionException(
+-        'No more fallback candidates available in ladder',
+-      );
+-    }
+-
+-    for (var i = nextIndex; i < _candidates.length; i++) {
+-      _currentIndex = i;
+-      final candidate = _candidates[i];
+-
+-      final conn = connectionFactory != null
+-          ? connectionFactory!(candidate, security)
+-          : HttpConnection(candidate: candidate, security: security);
+-
+-      try {
+-        final client = await conn.open(timeout: tierBudget);
+-        _activeConnection = conn;
+-        _activeClient = client;
+-
+-        final switchedEvent = ChannelTierSwitched(
+-          fromCandidate: prevCandidate,
+-          toCandidate: candidate,
+-          reason: reason,
+-          timestamp: DateTime.now().toUtc(),
+-        );
+-        _eventController.add(switchedEvent);
+-        unawaited(eventLog?.logChannel(switchedEvent));
+-
+-        return client;
+-      } catch (e) {
+-        await conn.close();
+-      }
+-    }
+-
+-    throw ConnectionException('All remaining fallback candidates failed');
+-  }
+-
+-  Future<void> close() async {
+-    if (_activeConnection != null) {
+-      await _activeConnection!.close();
+-      _activeConnection = null;
+-      _activeClient = null;
+-    }
+-    await _eventController.close();
+-  }
+-}
+--- a/packages/libreshare_core/lib/src/connection/http_connection.dart	2026-11-06 16:53:32.331309008 +0530
++++ b/packages/libreshare_core/lib/src/connection/http_connection.dart	1970-01-01 05:30:00.000000000 +0530
+@@ -1,103 +0,0 @@
+-import 'dart:async';
+-
+-import '../client/api_client.dart';
+-import '../client/peer_client.dart';
+-import '../security/contracts.dart';
+-import 'candidate.dart';
+-import 'connection.dart';
+-
+-/// HTTP(S) implementation of [Connection] representing a single candidate path.
+-class HttpConnection implements Connection {
+-  HttpConnection({
+-    required this.candidate,
+-    this.security = const SecurityConfig.plaintext(),
+-    this.clientFactory,
+-  });
+-
+-  @override
+-  final Candidate candidate;
+-  final SecurityConfig security;
+-  final PeerClient Function(Candidate candidate, SecurityConfig security)?
+-  clientFactory;
+-
+-  ConnectionState _state = ConnectionState.disconnected;
+-  Duration? _latency;
+-  PeerClient? _client;
+-
+-  @override
+-  ConnectionState get state => _state;
+-
+-  @override
+-  bool get isHealthy => _state == ConnectionState.connected;
+-
+-  @override
+-  Duration? get latency => _latency;
+-
+-  @override
+-  Future<PeerClient> open({Duration? timeout}) async {
+-    _state = ConnectionState.connecting;
+-    final effectiveTimeout = timeout ?? const Duration(seconds: 3);
+-
+-    try {
+-      final client = clientFactory != null
+-          ? clientFactory!(candidate, security)
+-          : ApiClient(
+-              host: candidate.host,
+-              port: candidate.port,
+-              https: security.isSecure,
+-              security: security,
+-              expectedFingerprint: candidate.peerFingerprint.isNotEmpty
+-                  ? candidate.peerFingerprint
+-                  : null,
+-              connectTimeout: effectiveTimeout,
+-            );
+-
+-      final stopwatch = Stopwatch()..start();
+-      try {
+-        await client.info().timeout(effectiveTimeout);
+-      } on TimeoutException catch (e) {
+-        _state = ConnectionState.failed;
+-        client.close();
+-        throw ConnectionTimeoutException(
+-          'Connection probe to ${candidate.host}:${candidate.port} timed out after ${effectiveTimeout.inSeconds}s',
+-          candidate: candidate,
+-          cause: e,
+-        );
+-      } on Object catch (e) {
+-        _state = ConnectionState.failed;
+-        client.close();
+-        final msg = e.toString().toLowerCase();
+-        if (msg.contains('fingerprint') ||
+-            msg.contains('certificate') ||
+-            msg.contains('cert_mismatch')) {
+-          throw FingerprintMismatchException(
+-            expectedFingerprint: candidate.peerFingerprint,
+-            presentedFingerprint: 'mismatch',
+-            candidate: candidate,
+-          );
+-        }
+-        throw ConnectionException(
+-          'Connection probe failed: $e',
+-          candidate: candidate,
+-          cause: e,
+-        );
+-      }
+-
+-      stopwatch.stop();
+-      _latency = stopwatch.elapsed;
+-      _state = ConnectionState.connected;
+-      _client = client;
+-      return client;
+-    } catch (e) {
+-      _state = ConnectionState.failed;
+-      rethrow;
+-    }
+-  }
+-
+-  @override
+-  Future<void> close() async {
+-    _state = ConnectionState.closed;
+-    _client?.close();
+-    _client = null;
+-  }
+-}
+--- a/packages/libreshare_core/lib/src/engine/libreshare_engine.dart	2026-11-06 17:56:56.610632684 +0530
++++ b/packages/libreshare_core/lib/src/engine/libreshare_engine.dart	2026-11-05 19:51:04.210821302 +0530
+@@ -53,11 +53,6 @@
+ import '../storage/receive_settings_store.dart';
+ import '../transfer/file_receiver.dart';
+ import '../transfer/file_sender.dart';
+-import '../connection/candidate.dart';
+-import '../connection/connection.dart';
+-import '../connection/connection_manager.dart';
+-import '../monitor/event_log.dart';
+-import '../storage/session_store.dart';
+ import 'discovery_config.dart';
+ import 'outgoing_send.dart';
+ import 'security_wiring.dart';
+@@ -77,8 +72,6 @@
+     this.receiveConfig = const ReceiveConfig(),
+     this.security,
+     this.advertiseIp,
+-    this.eventLog,
+-    this.sessionStore,
+   }) : _registry = PeerRegistry(
+          selfDeviceId: self.deviceId,
+          clock: clock,
+@@ -159,8 +152,6 @@
+   /// links, pair invites) instead of the listener's own; for a device behind
+   /// NAT such as a container. Must be an IP literal.
+   final String? advertiseIp;
+-  final EventLog? eventLog;
+-  final SessionStore? sessionStore;
+ 
+   /// Owner of Receive mode (Off / For(N) / Always, visibility, pauses). Its
+   /// gate is this engine.
+@@ -839,34 +830,9 @@
+     int chunkConcurrency = 3,
+     Duration acceptTimeout = kPermissionTimeout,
+     Duration probeTimeout = const Duration(milliseconds: 1500),
+-  }) => beginSendToCandidates(
+-    device,
+-    files,
+-    pin: pin,
+-    chunkConcurrency: chunkConcurrency,
+-    acceptTimeout: acceptTimeout,
+-    probeTimeout: probeTimeout,
+-  );
+-
+-  /// [beginSendTo] with explicit candidates and fallback controls (Increment 4).
+-  OutgoingSend beginSendToCandidates(
+-    DiscoveredDevice device,
+-    List<File> files, {
+-    String? pin,
+-    int chunkConcurrency = 3,
+-    Duration acceptTimeout = kPermissionTimeout,
+-    Duration probeTimeout = const Duration(milliseconds: 1500),
+-    List<Candidate>? candidates,
+-    bool enableFallback = true,
+   }) => _beginSend(
+     files,
+-    find: (cancel) => _findEndpointWithLadder(
+-      device: device,
+-      probeTimeout: probeTimeout,
+-      cancel: cancel,
+-      candidates: candidates,
+-      enableFallback: enableFallback,
+-    ),
++    find: (cancel) => _findEndpoint(device, probeTimeout, cancel),
+     pin: pin,
+     chunkConcurrency: chunkConcurrency,
+     acceptTimeout: acceptTimeout,
+@@ -1162,116 +1128,6 @@
+     return null;
+   }
+ 
+-  Future<SendEndpoint?> _findEndpointWithLadder({
+-    required DiscoveredDevice device,
+-    required Duration probeTimeout,
+-    required CancelSignal cancel,
+-    List<Candidate>? candidates,
+-    bool enableFallback = true,
+-  }) async {
+-    if (cancel.isCancelled) return null;
+-    if (device.info.port < 1) return null;
+-    if (discovery.infoProbe != null) {
+-      return _findEndpoint(device, probeTimeout, cancel);
+-    }
+-    final list = candidates ?? candidatesForDevice(device);
+-    if (list.isEmpty) {
+-      return _findEndpoint(device, probeTimeout, cancel);
+-    }
+-    final mgr = ConnectionManager(
+-      candidates: list,
+-      security: _secure ? _config : const SecurityConfig.plaintext(),
+-      tierBudget: probeTimeout,
+-      eventLog: eventLog,
+-      pinnedFingerprint: device.info.fingerprint.isNotEmpty
+-          ? device.info.fingerprint
+-          : null,
+-      enableFallback: enableFallback,
+-    );
+-    final sub = mgr.events.listen((e) {
+-      _emit(ChannelStateChanged(e));
+-    });
+-    try {
+-      while (!cancel.isCancelled) {
+-        try {
+-          if (mgr.activeCandidate == null) {
+-            final connectFuture = mgr.connect(timeout: probeTimeout);
+-            await Future.any([connectFuture, cancel.whenCancelled]);
+-            if (cancel.isCancelled) return null;
+-          } else {
+-            final fallbackFuture = mgr.fallbackToNext(
+-              reason: 'device_id_mismatch',
+-            );
+-            await Future.any([fallbackFuture, cancel.whenCancelled]);
+-            if (cancel.isCancelled) return null;
+-          }
+-        } on ConnectionException {
+-          break;
+-        }
+-        final active = mgr.activeCandidate;
+-        if (active == null) break;
+-        final answers = await Future.any<bool>([
+-          _answersAs(active.host, active.port, device.id, probeTimeout),
+-          cancel.whenCancelled.then((_) => false),
+-        ]);
+-        if (cancel.isCancelled) return null;
+-        if (answers) {
+-          return (host: active.host, port: active.port);
+-        }
+-        if (!enableFallback) break;
+-      }
+-    } on Object catch (e) {
+-      _log.warning('Connection ladder resolution failed: $e');
+-    } finally {
+-      await sub.cancel();
+-      await mgr.close();
+-    }
+-    return null;
+-  }
+-
+-  List<Candidate> candidatesForDevice(DiscoveredDevice device) {
+-    if (device.info.port < 1 || device.info.port > 65535) return const [];
+-    final res = <Candidate>[];
+-    final fp = device.info.fingerprint;
+-    final primaryKind = _classifyCandidateKind(device.address);
+-    res.add(
+-      Candidate.create(
+-        kind: primaryKind,
+-        host: device.address,
+-        port: device.info.port,
+-        peerFingerprint: fp,
+-        costHint: primaryKind.defaultCostHint,
+-      ),
+-    );
+-    for (final addr in device.info.addrs) {
+-      if (addr.ip != device.address) {
+-        final kind = _classifyCandidateKind(addr.ip, iface: addr.iface);
+-        res.add(
+-          Candidate.create(
+-            kind: kind,
+-            host: addr.ip,
+-            port: device.info.port,
+-            peerFingerprint: fp,
+-            costHint: kind.defaultCostHint,
+-          ),
+-        );
+-      }
+-    }
+-    return res;
+-  }
+-
+-  CandidateKind _classifyCandidateKind(String host, {String? iface}) {
+-    if (host == '127.0.0.1' || host == 'localhost' || host == '::1') {
+-      return CandidateKind.loopback;
+-    }
+-    if (iface == 'wifi') return CandidateKind.wifi;
+-    if (iface == 'ethernet') return CandidateKind.lan;
+-    if (host.startsWith('192.168.1.') || host.startsWith('192.168.0.')) {
+-      return CandidateKind.wifi;
+-    }
+-    return CandidateKind.lan;
+-  }
+-
+   Future<bool> _answersAs(
+     String host,
+     int port,
+--- a/packages/libreshare_core/lib/src/model/events.dart	2026-11-06 16:53:32.329309013 +0530
++++ b/packages/libreshare_core/lib/src/model/events.dart	2026-11-05 04:34:17.120878087 +0530
+@@ -1,8 +1,6 @@
+ /// Events emitted by the engine (spec §3: core emits a `Stream` of LsEvent).
+ library;
+ 
+-import '../monitor/channel_event.dart';
+-
+ sealed class LsEvent {
+   const LsEvent();
+ }
+@@ -82,9 +80,3 @@
+   final String alias;
+   final int rejectCount;
+ }
+-
+-/// Emitted when connection ladder candidates change state or switch tiers (Increment 4).
+-class ChannelStateChanged extends LsEvent {
+-  const ChannelStateChanged(this.event);
+-  final ChannelEvent event;
+-}
+--- a/packages/libreshare_core/lib/src/monitor/channel_event.dart	2026-11-06 16:53:32.332309004 +0530
++++ b/packages/libreshare_core/lib/src/monitor/channel_event.dart	1970-01-01 05:30:00.000000000 +0530
+@@ -1,130 +0,0 @@
+-/// Channel and connection ladder events for the LibreShare monitor subsystem (Increment 4).
+-///
+-/// Emitted during candidate probing, channel promotion, failure detection, and tier fallback.
+-/// These events feed [StatusMonitor], [EventLog], and app UI indicators (Wi-Fi / LAN badges).
+-library;
+-
+-import '../connection/candidate.dart';
+-
+-/// Base sealed class for all connection ladder and transport channel lifecycle events.
+-sealed class ChannelEvent {
+-  const ChannelEvent({required this.timestamp});
+-
+-  /// Timestamp when this event was recorded.
+-  final DateTime timestamp;
+-}
+-
+-/// Emitted when a candidate channel successfully completes its TLS handshake
+-/// and becomes the primary active transport for a session.
+-class ChannelActive extends ChannelEvent {
+-  const ChannelActive({
+-    required this.candidate,
+-    this.sessionId,
+-    required this.rtt,
+-    required super.timestamp,
+-  });
+-
+-  /// Active candidate chosen for data transmission.
+-  final Candidate candidate;
+-
+-  /// Optional session identifier associated with this channel.
+-  final String? sessionId;
+-
+-  /// Round-trip time measured during connection activation.
+-  final Duration rtt;
+-
+-  @override
+-  String toString() =>
+-      'ChannelActive(candidate: ${candidate.id}, tier: ${candidate.kind.wire}, '
+-      'rtt: ${rtt.inMilliseconds}ms, sid: $sessionId)';
+-}
+-
+-/// Emitted when an active channel or candidate connection fails.
+-class ChannelFailed extends ChannelEvent {
+-  const ChannelFailed({
+-    required this.candidate,
+-    this.sessionId,
+-    required this.reason,
+-    this.error,
+-    this.consecutiveFailures = 1,
+-    required super.timestamp,
+-  });
+-
+-  /// The candidate whose channel failed.
+-  final Candidate candidate;
+-
+-  /// Associated session identifier, if bound.
+-  final String? sessionId;
+-
+-  /// Human-readable diagnosis or failure category.
+-  final String reason;
+-
+-  /// Underlying error or exception, if any.
+-  final Object? error;
+-
+-  /// Number of consecutive chunk or probe failures observed on this channel.
+-  final int consecutiveFailures;
+-
+-  @override
+-  String toString() =>
+-      'ChannelFailed(candidate: ${candidate.id}, reason: $reason, '
+-      'failures: $consecutiveFailures, sid: $sessionId)';
+-}
+-
+-/// Emitted when the connection ladder switches from one candidate/tier to another.
+-///
+-/// For example, falling back from Wi-Fi (Tier 1) to LAN (Tier 2) after 3 consecutive failures.
+-class ChannelTierSwitched extends ChannelEvent {
+-  const ChannelTierSwitched({
+-    this.sessionId,
+-    this.fromCandidate,
+-    required this.toCandidate,
+-    required this.reason,
+-    required super.timestamp,
+-  });
+-
+-  /// Associated session identifier, if bound.
+-  final String? sessionId;
+-
+-  /// The previous candidate channel that failed or was demoted, if known.
+-  final Candidate? fromCandidate;
+-
+-  /// The new candidate promoted to active channel.
+-  final Candidate toCandidate;
+-
+-  /// Operational cause for switching tiers (e.g. "consecutive_chunk_failures", "probe_timeout").
+-  final String reason;
+-
+-  @override
+-  String toString() =>
+-      'ChannelTierSwitched(from: ${fromCandidate?.id ?? "none"} [${fromCandidate?.kind.wire ?? "none"}] -> '
+-      'to: ${toCandidate.id} [${toCandidate.kind.wire}], reason: $reason, sid: $sessionId)';
+-}
+-
+-/// Emitted when a candidate is tested during background health checking, racing, or probing.
+-class ChannelCandidateTested extends ChannelEvent {
+-  const ChannelCandidateTested({
+-    required this.candidate,
+-    required this.success,
+-    this.rtt,
+-    this.error,
+-    required super.timestamp,
+-  });
+-
+-  /// Candidate that was probed.
+-  final Candidate candidate;
+-
+-  /// Whether the probe or test connection succeeded.
+-  final bool success;
+-
+-  /// Measured latency if successful.
+-  final Duration? rtt;
+-
+-  /// Diagnostic failure description if probe failed.
+-  final String? error;
+-
+-  @override
+-  String toString() =>
+-      'ChannelCandidateTested(candidate: ${candidate.id}, success: $success, '
+-      'rtt: ${rtt?.inMilliseconds}ms${error != null ? ", error: $error" : ""})';
+-}
+--- a/packages/libreshare_core/lib/src/monitor/event_log.dart	2026-11-06 16:53:32.332309004 +0530
++++ b/packages/libreshare_core/lib/src/monitor/event_log.dart	1970-01-01 05:30:00.000000000 +0530
+@@ -1,856 +0,0 @@
+-// ignore_for_file: depend_on_referenced_packages
+-/// Structured persistent event logging subsystem for LibreShare (Increment 4, Task P4-3).
+-///
+-/// Provides in-memory ring buffer buffering coupled with atomic disk persistence
+-/// (using single or daily-partitioned JSONL files).
+-///
+-/// Security & Operational Invariants:
+-/// 1. ZERO SECRET LEAKS: Validates every event for forbidden keys or secret patterns.
+-/// 2. POSIX PERMISSIONS: Storage directory 0700, event log files 0600.
+-/// 3. ATOMIC DISK PERSISTENCE: Flushed appends and atomic `.tmp` rewrites on prune/compaction.
+-/// 4. 24H TTL PRUNING: Historical events beyond retention window are pruned from memory and disk.
+-/// 5. CRASH RECOVERY: Corrupt trailing lines and orphaned `.tmp` files are cleaned up on `init()`.
+-library;
+-
+-import 'dart:async';
+-import 'dart:collection';
+-import 'dart:convert';
+-import 'dart:io';
+-
+-import 'package:libreshare_core/libreshare_core.dart';
+-
+-/// Exception thrown when an event log operation fails.
+-class EventLogException implements Exception {
+-  const EventLogException(this.message, [this.cause]);
+-
+-  final String message;
+-  final Object? cause;
+-
+-  @override
+-  String toString() =>
+-      'EventLogException: $message${cause != null ? " (cause: $cause)" : ""}';
+-}
+-
+-/// A fixed-capacity in-memory ring buffer evicting oldest entries on overflow (FIFO).
+-class RingBuffer<T> {
+-  RingBuffer(this.capacity)
+-    : assert(capacity > 0, 'capacity must be greater than zero');
+-
+-  final int capacity;
+-  final ListQueue<T> _queue = ListQueue<T>();
+-
+-  /// Adds [item] to the end of the buffer, evicting the oldest item if at capacity.
+-  void add(T item) {
+-    if (_queue.length >= capacity) {
+-      _queue.removeFirst();
+-    }
+-    _queue.addLast(item);
+-  }
+-
+-  /// Current number of items in the buffer.
+-  int get length => _queue.length;
+-
+-  /// Whether the buffer is empty.
+-  bool get isEmpty => _queue.isEmpty;
+-
+-  /// Whether the buffer contains items.
+-  bool get isNotEmpty => _queue.isNotEmpty;
+-
+-  /// Returns an unmodifiable snapshot of the buffered items in insertion order.
+-  List<T> toList() => List.unmodifiable(_queue);
+-
+-  /// Iterable view of the current items.
+-  Iterable<T> get items => _queue;
+-
+-  /// Removes all items from the ring buffer.
+-  void clear() => _queue.clear();
+-
+-  /// Removes items satisfying [test].
+-  void removeWhere(bool Function(T) test) {
+-    _queue.removeWhere(test);
+-  }
+-}
+-
+-/// Abstract interface for the LibreShare structured event log.
+-abstract interface class EventLog {
+-  /// Initializes storage directories and runs crash recovery.
+-  Future<void> init();
+-
+-  /// Records an [event] into the in-memory ring buffer and persistent storage.
+-  ///
+-  /// Throws [ArgumentError] if the event violates the zero secret leak invariant.
+-  Future<void> log(EventRecord event);
+-
+-  /// Queries events matching specified filters.
+-  ///
+-  /// Filters:
+-  /// - [since]: inclusive lower bound on event timestamp
+-  /// - [until]: inclusive upper bound on event timestamp
+-  /// - [type]: exact event type string
+-  /// - [level]: event severity level
+-  /// - [sessionId]: transfer session identifier
+-  /// - [limit]: maximum number of records to return
+-  /// - [descending]: when true, latest records first; default is false (oldest first)
+-  Future<List<EventRecord>> query({
+-    DateTime? since,
+-    DateTime? until,
+-    String? type,
+-    EventLevel? level,
+-    String? sessionId,
+-    int? limit,
+-    bool descending = false,
+-  });
+-
+-  /// Prunes events older than [ttl] from both memory and disk storage.
+-  ///
+-  /// Returns the total number of pruned event records.
+-  Future<int> prune(Duration ttl);
+-
+-  /// Current number of events in the in-memory ring buffer.
+-  int get inMemoryCount;
+-
+-  /// Snapshot of events currently held in the in-memory ring buffer.
+-  List<EventRecord> get recentEvents;
+-
+-  /// Broadcast stream of events logged through this instance.
+-  Stream<EventRecord> get events;
+-
+-  /// Flushes any pending writes to disk.
+-  Future<void> flush();
+-
+-  /// Current clock used for timestamping and pruning.
+-  Clock get clock;
+-
+-  /// Closes the event log and releases file locks.
+-  Future<void> close();
+-
+-  /// Helper: logs a session lifecycle transition from a [SessionRecord].
+-  Future<void> logSession(
+-    SessionRecord session, {
+-    required String message,
+-    String? type,
+-    EventLevel? level,
+-    Map<String, Object?> extraData = const {},
+-  });
+-
+-  /// Helper: logs a connection ladder or candidate event from a [ChannelEvent].
+-  Future<void> logChannel(ChannelEvent channelEvent, {String? sessionId});
+-
+-  /// Helper: logs a diagnostic error.
+-  Future<void> logError(
+-    String message, {
+-    String? type,
+-    String? sessionId,
+-    Object? error,
+-    StackTrace? stackTrace,
+-    Map<String, Object?> data = const {},
+-  });
+-}
+-
+-Future<int> _defaultChmod(String mode, String path) async {
+-  if (Platform.isWindows) return 0;
+-  final r = await Process.run('chmod', [mode, path]);
+-  return r.exitCode;
+-}
+-
+-/// File-backed persistent implementation of [EventLog].
+-///
+-/// Features:
+-/// - In-memory ring buffer of configurable [capacity]
+-/// - JSONL persistence with optional daily partitioning (`events_YYYY-MM-DD.jsonl`)
+-/// - Directory permission 0700, file permission 0600
+-/// - Mutex-serialized atomic disk writes and atomic temp-file pruning
+-/// - Graceful crash recovery handling truncated trailing lines and orphaned `.tmp` files.
+-class FileEventLog implements EventLog {
+-  FileEventLog(
+-    this.directory, {
+-    this.capacity = 1000,
+-    this.partitionByDay = true,
+-    this._clock = const SystemClock(),
+-    ChmodRunner? chmodRunner,
+-  }) : _chmod = chmodRunner ?? _defaultChmod,
+-       _ringBuffer = RingBuffer<EventRecord>(capacity);
+-
+-  /// Directory holding the event log files.
+-  final Directory directory;
+-
+-  /// Capacity of the in-memory ring buffer.
+-  final int capacity;
+-
+-  /// If true, creates files partitioned by date (`events_YYYY-MM-DD.jsonl`).
+-  /// If false, uses a single file (`events.jsonl`).
+-  final bool partitionByDay;
+-
+-  final Clock _clock;
+-  final ChmodRunner _chmod;
+-  final RingBuffer<EventRecord> _ringBuffer;
+-  final StreamController<EventRecord> _controller =
+-      StreamController<EventRecord>.broadcast();
+-
+-  Future<void> _lock = Future<void>.value();
+-  bool _closed = false;
+-
+-  void _checkOpen() {
+-    if (_closed) throw const EventLogException('EventLog is closed');
+-  }
+-
+-  Future<T> _synchronized<T>(Future<T> Function() action) async {
+-    _checkOpen();
+-    final prev = _lock;
+-    final completer = Completer<void>();
+-    _lock = completer.future;
+-    try {
+-      await prev;
+-      return await action();
+-    } finally {
+-      completer.complete();
+-    }
+-  }
+-
+-  String _formatDate(DateTime dt) {
+-    final y = dt.year.toString().padLeft(4, '0');
+-    final m = dt.month.toString().padLeft(2, '0');
+-    final d = dt.day.toString().padLeft(2, '0');
+-    return '$y-$m-$d';
+-  }
+-
+-  File _targetFileFor(DateTime timestamp) {
+-    if (partitionByDay) {
+-      final dateStr = _formatDate(timestamp);
+-      return File(
+-        '${directory.path}${Platform.pathSeparator}events_$dateStr.jsonl',
+-      );
+-    }
+-    return File('${directory.path}${Platform.pathSeparator}events.jsonl');
+-  }
+-
+-  Future<List<File>> _getEventFiles() async {
+-    if (!await directory.exists()) return [];
+-    final files = <File>[];
+-    await for (final entity in directory.list(followLinks: false)) {
+-      if (entity is File &&
+-          entity.path.endsWith('.jsonl') &&
+-          !entity.path.endsWith('.tmp')) {
+-        files.add(entity);
+-      }
+-    }
+-    files.sort((a, b) => a.path.compareTo(b.path));
+-    return files;
+-  }
+-
+-  Future<List<String>> _readValidLines(File file) async {
+-    if (!await file.exists()) return [];
+-    try {
+-      final text = await file.readAsString();
+-      final lines = const LineSplitter().convert(text);
+-      return lines.where((l) => l.trim().isNotEmpty).toList();
+-    } catch (_) {
+-      return [];
+-    }
+-  }
+-
+-  @override
+-  int get inMemoryCount => _ringBuffer.length;
+-
+-  @override
+-  List<EventRecord> get recentEvents => _ringBuffer.toList();
+-
+-  bool _initialized = false;
+-
+-  @override
+-  Clock get clock => _clock;
+-
+-  @override
+-  Stream<EventRecord> get events => _controller.stream;
+-
+-  @override
+-  Future<void> init() async {
+-    _checkOpen();
+-    if (_initialized) return;
+-    if (!await directory.exists()) {
+-      await directory.create(recursive: true);
+-      await _chmod('0700', directory.path);
+-    }
+-    await _synchronized(() async {
+-      if (_initialized) return;
+-      await _recoverFromCrash();
+-      _initialized = true;
+-    });
+-  }
+-
+-  /// Scans event files, discards dangling .tmp files and repairs corrupt trailing lines.
+-  Future<void> _recoverFromCrash() async {
+-    // 1. Delete orphaned .tmp files
+-    if (await directory.exists()) {
+-      await for (final entity in directory.list(followLinks: false)) {
+-        if (entity is File && entity.path.endsWith('.tmp')) {
+-          try {
+-            await entity.delete();
+-          } catch (_) {}
+-        }
+-      }
+-    }
+-
+-    // 2. Validate and clean existing event files
+-    final files = await _getEventFiles();
+-    final recoveredRecords = <EventRecord>[];
+-
+-    for (final file in files) {
+-      final lines = await _readValidLines(file);
+-      final validLines = <String>[];
+-      var hasCorruptLine = false;
+-
+-      for (final line in lines) {
+-        try {
+-          final record = EventRecord.fromJsonLine(line);
+-          validLines.add(line);
+-          recoveredRecords.add(record);
+-        } catch (_) {
+-          // Truncated or malformed JSON from an un-flushed write / crash
+-          hasCorruptLine = true;
+-        }
+-      }
+-
+-      if (hasCorruptLine) {
+-        // Rewrite file atomically with valid lines only
+-        final tmp = File('${file.path}.tmp');
+-        final sink = tmp.openWrite();
+-        for (final validLine in validLines) {
+-          sink.writeln(validLine);
+-        }
+-        await sink.flush();
+-        await sink.close();
+-        await _chmod('0600', tmp.path);
+-        await tmp.rename(file.path);
+-      }
+-    }
+-
+-    // Populate in-memory ring buffer with most recent events
+-    recoveredRecords.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+-    _ringBuffer.clear();
+-    final start = recoveredRecords.length > capacity
+-        ? recoveredRecords.length - capacity
+-        : 0;
+-    for (var i = start; i < recoveredRecords.length; i++) {
+-      _ringBuffer.add(recoveredRecords[i]);
+-    }
+-  }
+-
+-  @override
+-  Future<void> log(EventRecord event) async {
+-    _checkOpen();
+-    // Validate zero secret leak invariant (throws ArgumentError on violation)
+-    event.toJson();
+-
+-    await init();
+-
+-    // Add to in-memory ring buffer
+-    _ringBuffer.add(event);
+-
+-    // Broadcast on stream
+-    if (!_controller.isClosed) {
+-      _controller.add(event);
+-    }
+-
+-    // Atomic append to file
+-    await _synchronized(() async {
+-      final target = _targetFileFor(event.timestamp);
+-      final exists = await target.exists();
+-      if (!exists) {
+-        await target.create(recursive: true);
+-        await _chmod('0600', target.path);
+-      }
+-
+-      final line = '${event.toJsonLine()}\n';
+-      final raf = await target.open(mode: FileMode.append);
+-      try {
+-        await raf.writeString(line);
+-        await raf.flush();
+-      } finally {
+-        await raf.close();
+-      }
+-    });
+-  }
+-
+-  bool _matchesQuery(
+-    EventRecord event, {
+-    DateTime? since,
+-    DateTime? until,
+-    String? type,
+-    EventLevel? level,
+-    String? sessionId,
+-  }) {
+-    if (since != null && event.timestamp.isBefore(since)) return false;
+-    if (until != null && event.timestamp.isAfter(until)) return false;
+-    if (type != null && event.type != type) return false;
+-    if (level != null && event.level != level) return false;
+-    if (sessionId != null && event.sessionId != sessionId) return false;
+-    return true;
+-  }
+-
+-  @override
+-  Future<List<EventRecord>> query({
+-    DateTime? since,
+-    DateTime? until,
+-    String? type,
+-    EventLevel? level,
+-    String? sessionId,
+-    int? limit,
+-    bool descending = false,
+-  }) async {
+-    _checkOpen();
+-    return _synchronized(() async {
+-      final results = <EventRecord>[];
+-      final seenIds = <String>{};
+-
+-      // Read records from disk
+-      final files = await _getEventFiles();
+-      for (final file in files) {
+-        final lines = await _readValidLines(file);
+-        for (final line in lines) {
+-          try {
+-            final record = EventRecord.fromJsonLine(line);
+-            if (_matchesQuery(
+-              record,
+-              since: since,
+-              until: until,
+-              type: type,
+-              level: level,
+-              sessionId: sessionId,
+-            )) {
+-              if (seenIds.add(record.id)) {
+-                results.add(record);
+-              }
+-            }
+-          } catch (_) {}
+-        }
+-      }
+-
+-      // Merge in-memory events if any were buffered
+-      for (final record in _ringBuffer.items) {
+-        if (_matchesQuery(
+-          record,
+-          since: since,
+-          until: until,
+-          type: type,
+-          level: level,
+-          sessionId: sessionId,
+-        )) {
+-          if (seenIds.add(record.id)) {
+-            results.add(record);
+-          }
+-        }
+-      }
+-
+-      // Sort
+-      results.sort((a, b) {
+-        final cmp = a.timestamp.compareTo(b.timestamp);
+-        return cmp != 0 ? cmp : a.id.compareTo(b.id);
+-      });
+-
+-      if (descending) {
+-        results.sort((a, b) {
+-          final cmp = b.timestamp.compareTo(a.timestamp);
+-          return cmp != 0 ? cmp : b.id.compareTo(a.id);
+-        });
+-      }
+-
+-      if (limit != null && limit > 0 && results.length > limit) {
+-        return results.take(limit).toList();
+-      }
+-      return results;
+-    });
+-  }
+-
+-  @override
+-  Future<int> prune(Duration ttl) async {
+-    _checkOpen();
+-    return _synchronized(() async {
+-      final cutoff = _clock.now().subtract(ttl);
+-      var prunedCount = 0;
+-
+-      // 1. Prune ring buffer
+-      _ringBuffer.removeWhere((e) => e.timestamp.isBefore(cutoff));
+-
+-      // 2. Remove orphaned .tmp files
+-      if (await directory.exists()) {
+-        await for (final entity in directory.list(followLinks: false)) {
+-          if (entity is File && entity.path.endsWith('.tmp')) {
+-            try {
+-              await entity.delete();
+-            } catch (_) {}
+-          }
+-        }
+-      }
+-
+-      // 3. Prune files
+-      final files = await _getEventFiles();
+-      for (final file in files) {
+-        final lines = await _readValidLines(file);
+-        final keptLines = <String>[];
+-        var filePruned = 0;
+-
+-        for (final line in lines) {
+-          try {
+-            final record = EventRecord.fromJsonLine(line);
+-            if (record.timestamp.isBefore(cutoff)) {
+-              filePruned++;
+-            } else {
+-              keptLines.add(line);
+-            }
+-          } catch (_) {
+-            filePruned++;
+-          }
+-        }
+-
+-        if (filePruned > 0) {
+-          prunedCount += filePruned;
+-          if (keptLines.isEmpty) {
+-            try {
+-              await file.delete();
+-            } catch (_) {}
+-          } else {
+-            // Atomic rewrite
+-            final tmp = File('${file.path}.tmp');
+-            final sink = tmp.openWrite();
+-            for (final line in keptLines) {
+-              sink.writeln(line);
+-            }
+-            await sink.flush();
+-            await sink.close();
+-            await _chmod('0600', tmp.path);
+-            await tmp.rename(file.path);
+-          }
+-        }
+-      }
+-
+-      return prunedCount;
+-    });
+-  }
+-
+-  @override
+-  Future<void> flush() async {
+-    _checkOpen();
+-    // In FileEventLog, each log() call flushes raf immediately.
+-  }
+-
+-  @override
+-  Future<void> close() async {
+-    _closed = true;
+-    if (!_controller.isClosed) {
+-      await _controller.close();
+-    }
+-  }
+-
+-  @override
+-  Future<void> logSession(
+-    SessionRecord session, {
+-    required String message,
+-    String? type,
+-    EventLevel? level,
+-    Map<String, Object?> extraData = const {},
+-  }) {
+-    return log(
+-      EventRecord.fromSession(
+-        session,
+-        message: message,
+-        type: type,
+-        level: level,
+-        data: extraData,
+-      ),
+-    );
+-  }
+-
+-  @override
+-  Future<void> logChannel(ChannelEvent channelEvent, {String? sessionId}) {
+-    return log(
+-      EventRecord.fromChannelEvent(channelEvent, sessionId: sessionId),
+-    );
+-  }
+-
+-  @override
+-  Future<void> logError(
+-    String message, {
+-    String? type,
+-    String? sessionId,
+-    Object? error,
+-    StackTrace? stackTrace,
+-    Map<String, Object?> data = const {},
+-  }) {
+-    return log(
+-      EventRecord.error(
+-        message,
+-        type: type,
+-        sessionId: sessionId,
+-        error: error,
+-        stackTrace: stackTrace,
+-        data: data,
+-      ),
+-    );
+-  }
+-}
+-
+-/// In-memory implementation of [EventLog] for lightweight testing and ephemeral engines.
+-class InMemoryEventLog implements EventLog {
+-  InMemoryEventLog({this.capacity = 1000, this._clock = const SystemClock()})
+-    : _ringBuffer = RingBuffer<EventRecord>(capacity);
+-
+-  final int capacity;
+-  final Clock _clock;
+-  final RingBuffer<EventRecord> _ringBuffer;
+-  final StreamController<EventRecord> _controller =
+-      StreamController<EventRecord>.broadcast();
+-  bool _closed = false;
+-
+-  void _checkOpen() {
+-    if (_closed) throw const EventLogException('InMemoryEventLog is closed');
+-  }
+-
+-  @override
+-  int get inMemoryCount => _ringBuffer.length;
+-
+-  @override
+-  List<EventRecord> get recentEvents => _ringBuffer.toList();
+-
+-  @override
+-  Clock get clock => _clock;
+-
+-  @override
+-  Stream<EventRecord> get events => _controller.stream;
+-
+-  @override
+-  Future<void> init() async {
+-    _checkOpen();
+-  }
+-
+-  @override
+-  Future<void> log(EventRecord event) async {
+-    _checkOpen();
+-    // Validate zero secret leaks
+-    event.toJson();
+-
+-    _ringBuffer.add(event);
+-    if (!_controller.isClosed) {
+-      _controller.add(event);
+-    }
+-  }
+-
+-  bool _matchesQuery(
+-    EventRecord event, {
+-    DateTime? since,
+-    DateTime? until,
+-    String? type,
+-    EventLevel? level,
+-    String? sessionId,
+-  }) {
+-    if (since != null && event.timestamp.isBefore(since)) return false;
+-    if (until != null && event.timestamp.isAfter(until)) return false;
+-    if (type != null && event.type != type) return false;
+-    if (level != null && event.level != level) return false;
+-    if (sessionId != null && event.sessionId != sessionId) return false;
+-    return true;
+-  }
+-
+-  @override
+-  Future<List<EventRecord>> query({
+-    DateTime? since,
+-    DateTime? until,
+-    String? type,
+-    EventLevel? level,
+-    String? sessionId,
+-    int? limit,
+-    bool descending = false,
+-  }) async {
+-    _checkOpen();
+-    final matching = _ringBuffer.items
+-        .where(
+-          (e) => _matchesQuery(
+-            e,
+-            since: since,
+-            until: until,
+-            type: type,
+-            level: level,
+-            sessionId: sessionId,
+-          ),
+-        )
+-        .toList();
+-
+-    matching.sort((a, b) {
+-      final cmp = a.timestamp.compareTo(b.timestamp);
+-      return cmp != 0 ? cmp : a.id.compareTo(b.id);
+-    });
+-
+-    if (descending) {
+-      matching.sort((a, b) {
+-        final cmp = b.timestamp.compareTo(a.timestamp);
+-        return cmp != 0 ? cmp : b.id.compareTo(a.id);
+-      });
+-    }
+-
+-    if (limit != null && limit > 0 && matching.length > limit) {
+-      return matching.take(limit).toList();
+-    }
+-    return matching;
+-  }
+-
+-  @override
+-  Future<int> prune(Duration ttl) async {
+-    _checkOpen();
+-    final cutoff = _clock.now().subtract(ttl);
+-    var count = 0;
+-    _ringBuffer.removeWhere((e) {
+-      if (e.timestamp.isBefore(cutoff)) {
+-        count++;
+-        return true;
+-      }
+-      return false;
+-    });
+-    return count;
+-  }
+-
+-  @override
+-  Future<void> flush() async {
+-    _checkOpen();
+-  }
+-
+-  @override
+-  Future<void> close() async {
+-    _closed = true;
+-    if (!_controller.isClosed) {
+-      await _controller.close();
+-    }
+-    _ringBuffer.clear();
+-  }
+-
+-  @override
+-  Future<void> logSession(
+-    SessionRecord session, {
+-    required String message,
+-    String? type,
+-    EventLevel? level,
+-    Map<String, Object?> extraData = const {},
+-  }) {
+-    return log(
+-      EventRecord.fromSession(
+-        session,
+-        message: message,
+-        type: type,
+-        level: level,
+-        data: extraData,
+-      ),
+-    );
+-  }
+-
+-  @override
+-  Future<void> logChannel(ChannelEvent channelEvent, {String? sessionId}) {
+-    return log(
+-      EventRecord.fromChannelEvent(channelEvent, sessionId: sessionId),
+-    );
+-  }
+-
+-  @override
+-  Future<void> logError(
+-    String message, {
+-    String? type,
+-    String? sessionId,
+-    Object? error,
+-    StackTrace? stackTrace,
+-    Map<String, Object?> data = const {},
+-  }) {
+-    return log(
+-      EventRecord.error(
+-        message,
+-        type: type,
+-        sessionId: sessionId,
+-        error: error,
+-        stackTrace: stackTrace,
+-        data: data,
+-      ),
+-    );
+-  }
+-}
+-
+-/// A decorating [SessionStore] that records lifecycle events into an [EventLog]
+-/// on session creation, progress updates, failure, deletion, and TTL sweep.
+-class EventLoggingSessionStore implements SessionStore {
+-  EventLoggingSessionStore(this._inner, this._eventLog);
+-
+-  final SessionStore _inner;
+-  final EventLog _eventLog;
+-
+-  SessionStore get inner => _inner;
+-  EventLog get eventLog => _eventLog;
+-
+-  @override
+-  Future<void> init() async {
+-    await _inner.init();
+-    await _eventLog.init();
+-  }
+-
+-  @override
+-  Future<SessionRecord?> getSession(String sessionId) =>
+-      _inner.getSession(sessionId);
+-
+-  @override
+-  Future<void> saveSession(SessionRecord record) async {
+-    await _inner.saveSession(record);
+-
+-    String message;
+-    EventLevel level = EventLevel.info;
+-    if (record.status == TransferStatus.completed) {
+-      message = 'Session ${record.sessionId} completed successfully';
+-    } else if (record.status == TransferStatus.failed) {
+-      message =
+-          'Session ${record.sessionId} failed: ${record.failureReason?.wire ?? "unknown"}';
+-      level = EventLevel.error;
+-    } else {
+-      message =
+-          'Session ${record.sessionId} saved (${record.status.wire}, role: ${record.role.wire})';
+-    }
+-
+-    await _eventLog.log(
+-      EventRecord.fromSession(record, message: message, level: level),
+-    );
+-  }
+-
+-  @override
+-  Future<void> deleteSession(String sessionId) async {
+-    await _inner.deleteSession(sessionId);
+-    await _eventLog.log(
+-      EventRecord.create(
+-        type: 'session_deleted',
+-        sessionId: sessionId,
+-        timestamp: _eventLog.clock.now(),
+-        message: 'Session $sessionId deleted from store',
+-      ),
+-    );
+-  }
+-
+-  @override
+-  Future<List<SessionRecord>> listSessions({SessionRole? role}) =>
+-      _inner.listSessions(role: role);
+-
+-  @override
+-  Future<int> sweepExpired({
+-    Duration maxAge = const Duration(hours: 24),
+-  }) async {
+-    final evicted = await _inner.sweepExpired(maxAge: maxAge);
+-    if (evicted > 0) {
+-      await _eventLog.log(
+-        EventRecord.create(
+-          type: 'session_swept',
+-          message:
+-              'Swept $evicted expired sessions older than ${maxAge.inHours}h',
+-          data: {'evictedCount': evicted, 'maxAgeHours': maxAge.inHours},
+-        ),
+-      );
+-    }
+-    return evicted;
+-  }
+-
+-  @override
+-  Future<void> close() async {
+-    await _inner.close();
+-    await _eventLog.close();
+-  }
+-}
+--- a/packages/libreshare_core/lib/src/monitor/event_record.dart	2026-11-06 16:53:32.332309004 +0530
++++ b/packages/libreshare_core/lib/src/monitor/event_record.dart	1970-01-01 05:30:00.000000000 +0530
+@@ -1,437 +0,0 @@
+-// ignore_for_file: depend_on_referenced_packages
+-/// Structured persistent event record models for LibreShare (Increment 4, Task P4-3).
+-///
+-/// Encapsulates persistent events for connection ladder transitions, channel state,
+-/// transfer session lifecycle, and diagnostic errors.
+-///
+-/// Security Invariants:
+-/// 1. ZERO SECRET LEAKS: Records MUST NEVER contain PINs, bearer tokens, private keys,
+-///    passwords, SAS nonces, or long secret payloads.
+-/// 2. FINGERPRINT TRUNCATION: Fingerprints stored in events or messages must be truncated
+-///    to <= 16 hex characters (`shortFp`) to prevent fingerprint harvesting.
+-/// 3. IMMUTABILITY & SERDE: Clean JSON round-tripping for JSONL append storage.
+-library;
+-
+-import 'dart:convert';
+-import 'dart:math';
+-
+-import '../model/transfer_status.dart';
+-import '../storage/session_record.dart';
+-import 'channel_event.dart';
+-
+-/// Severity level of an event record.
+-enum EventLevel {
+-  debug('debug'),
+-  info('info'),
+-  warning('warning'),
+-  error('error'),
+-  securityAlert('security_alert');
+-
+-  const EventLevel(this.wire);
+-  final String wire;
+-
+-  static EventLevel fromWire(String wire) {
+-    for (final level in EventLevel.values) {
+-      if (level.wire == wire) return level;
+-    }
+-    throw ArgumentError.value(wire, 'wire', 'Unknown event level');
+-  }
+-}
+-
+-/// Regex patterns that identify secret values in messages or payload attributes.
+-final List<RegExp> _kSecretValuePatterns = [
+-  // PEM private keys
+-  RegExp(r'-----BEGIN[ A-Z0-9_-]*PRIVATE KEY-----', caseSensitive: false),
+-  // Explicit PIN or SAS numeric codes (e.g. pin=123456 or pin: 123456)
+-  RegExp(r'\b(?:pin|code)\s*[:=]\s*\d{4,8}\b', caseSensitive: false),
+-  // Explicit token / secret / password assignment
+-  RegExp(
+-    r'\b(?:token|secret|password)\s*[:=]\s*[^\s,;]{6,}\b',
+-    caseSensitive: false,
+-  ),
+-  // Bearer tokens
+-  RegExp(r'Bearer\s+[A-Za-z0-9._~+/-]{16,}', caseSensitive: false),
+-];
+-
+-/// Validates that [map] contains no forbidden secret keys and no secret values.
+-void assertNoEventSecretKeys(Map<String, Object?> map) {
+-  for (final entry in map.entries) {
+-    final keyLower = entry.key.toLowerCase();
+-    if (kForbiddenSecretKeys.contains(keyLower)) {
+-      throw ArgumentError(
+-        'Security violation: EventRecord must never contain secret key: "${entry.key}"',
+-      );
+-    }
+-    for (final forbidden in kForbiddenSecretKeys) {
+-      if (keyLower.contains(forbidden)) {
+-        throw ArgumentError(
+-          'Security violation: EventRecord key "${entry.key}" contains forbidden term: "$forbidden"',
+-        );
+-      }
+-    }
+-    _assertNoSecretValue(entry.value, keyContext: entry.key);
+-  }
+-}
+-
+-/// Validates that [value] does not contain secret patterns.
+-void _assertNoSecretValue(Object? value, {String? keyContext}) {
+-  if (value == null) return;
+-  if (value is String) {
+-    for (final pattern in _kSecretValuePatterns) {
+-      if (pattern.hasMatch(value)) {
+-        throw ArgumentError(
+-          'Security violation: EventRecord field ${keyContext != null ? "($keyContext) " : ""}contains secret pattern: $pattern',
+-        );
+-      }
+-    }
+-    // High-entropy or long secret check: if a string without whitespace is > 96 chars,
+-    // ensure it is not an unauthorized raw key/secret payload.
+-    // (A 64-char hex string is allowed for sha256 digests).
+-    if (value.length > 96 &&
+-        !value.contains(' ') &&
+-        !value.contains('/') &&
+-        !value.contains(':')) {
+-      throw ArgumentError(
+-        'Security violation: EventRecord field ${keyContext != null ? "($keyContext) " : ""}contains long opaque secret candidate (${value.length} chars)',
+-      );
+-    }
+-  } else if (value is Map) {
+-    assertNoEventSecretKeys(value.cast<String, Object?>());
+-  } else if (value is List) {
+-    for (final item in value) {
+-      _assertNoSecretValue(item, keyContext: keyContext);
+-    }
+-  }
+-}
+-
+-/// Validates an entire event's text and structure for secret leaks.
+-void assertNoSecretsInEvent({
+-  required String type,
+-  required String message,
+-  String? sessionId,
+-  required Map<String, Object?> data,
+-}) {
+-  _assertNoSecretValue(type, keyContext: 'type');
+-  _assertNoSecretValue(message, keyContext: 'message');
+-  if (sessionId != null) {
+-    _assertNoSecretValue(sessionId, keyContext: 'sessionId');
+-  }
+-  assertNoEventSecretKeys(data);
+-}
+-
+-/// Helper to truncate fingerprints to at most 16 hex characters per Decision D6 / Rule 3.
+-String shortFingerprint(String fingerprint) {
+-  final clean = fingerprint.replaceAll(':', '').toLowerCase();
+-  return clean.length > 16 ? clean.substring(0, 16) : clean;
+-}
+-
+-/// Persistent record of a single event in the LibreShare monitor and diagnostics log.
+-class EventRecord {
+-  const EventRecord({
+-    required this.id,
+-    required this.timestamp,
+-    required this.type,
+-    this.level = EventLevel.info,
+-    this.sessionId,
+-    required this.message,
+-    this.data = const {},
+-  }) : assert(id.length > 0, 'id must not be empty'),
+-       assert(type.length > 0, 'type must not be empty'),
+-       assert(message.length > 0, 'message must not be empty');
+-
+-  /// Unique event identifier.
+-  final String id;
+-
+-  /// UTC timestamp when the event occurred.
+-  final DateTime timestamp;
+-
+-  /// Categorical event type (e.g. 'channel_active', 'session_finished', 'error').
+-  final String type;
+-
+-  /// Severity level of the event.
+-  final EventLevel level;
+-
+-  /// Optional transfer session ID bound to this event.
+-  final String? sessionId;
+-
+-  /// Human-readable event description.
+-  final String message;
+-
+-  /// Non-secret structured properties associated with this event.
+-  final Map<String, Object?> data;
+-
+-  static int _sequenceCounter = 0;
+-
+-  /// Factory to construct a new event with an auto-generated ID and timestamp.
+-  factory EventRecord.create({
+-    required String type,
+-    EventLevel level = EventLevel.info,
+-    String? sessionId,
+-    required String message,
+-    Map<String, Object?> data = const {},
+-    DateTime? timestamp,
+-    String? id,
+-  }) {
+-    final now = (timestamp ?? DateTime.now()).toUtc();
+-    final seq = (++_sequenceCounter).toString().padLeft(8, '0');
+-    final rand = Random().nextInt(0xFFFF).toRadixString(16).padLeft(4, '0');
+-    final eventId = id ?? 'evt_${now.microsecondsSinceEpoch}_${seq}_$rand';
+-    assertNoSecretsInEvent(
+-      type: type,
+-      message: message,
+-      sessionId: sessionId,
+-      data: data,
+-    );
+-    return EventRecord(
+-      id: eventId,
+-      timestamp: now,
+-      type: type,
+-      level: level,
+-      sessionId: sessionId,
+-      message: message,
+-      data: data,
+-    );
+-  }
+-
+-  /// Constructs an [EventRecord] from a connection ladder [ChannelEvent].
+-  factory EventRecord.fromChannelEvent(
+-    ChannelEvent event, {
+-    String? sessionId,
+-  }) {
+-    final sid = event is ChannelActive
+-        ? (event.sessionId ?? sessionId)
+-        : event is ChannelFailed
+-        ? (event.sessionId ?? sessionId)
+-        : event is ChannelTierSwitched
+-        ? (event.sessionId ?? sessionId)
+-        : sessionId;
+-
+-    if (event is ChannelActive) {
+-      final shortFp = shortFingerprint(event.candidate.peerFingerprint);
+-      return EventRecord.create(
+-        type: 'channel_active',
+-        level: EventLevel.info,
+-        sessionId: sid,
+-        timestamp: event.timestamp,
+-        message:
+-            'Channel active: ${event.candidate.kind.wire} (${event.candidate.host}:${event.candidate.port}, RTT: ${event.rtt.inMilliseconds}ms)',
+-        data: {
+-          'candidateId': event.candidate.id,
+-          'kind': event.candidate.kind.wire,
+-          'host': event.candidate.host,
+-          'port': event.candidate.port,
+-          'rttMs': event.rtt.inMilliseconds,
+-          'costHint': event.candidate.costHint,
+-          'peerFingerprint': shortFp,
+-        },
+-      );
+-    } else if (event is ChannelFailed) {
+-      return EventRecord.create(
+-        type: 'channel_failed',
+-        level: EventLevel.warning,
+-        sessionId: sid,
+-        timestamp: event.timestamp,
+-        message:
+-            'Channel failed on ${event.candidate.kind.wire}: ${event.reason}',
+-        data: {
+-          'candidateId': event.candidate.id,
+-          'kind': event.candidate.kind.wire,
+-          'reason': event.reason,
+-          'consecutiveFailures': event.consecutiveFailures,
+-          if (event.error != null) 'error': event.error.toString(),
+-        },
+-      );
+-    } else if (event is ChannelTierSwitched) {
+-      return EventRecord.create(
+-        type: 'channel_tier_switched',
+-        level: EventLevel.info,
+-        sessionId: sid,
+-        timestamp: event.timestamp,
+-        message:
+-            'Switched channel tier from ${event.fromCandidate?.kind.wire ?? "none"} to ${event.toCandidate.kind.wire} (reason: ${event.reason})',
+-        data: {
+-          if (event.fromCandidate != null)
+-            'fromCandidateId': event.fromCandidate!.id,
+-          if (event.fromCandidate != null)
+-            'fromKind': event.fromCandidate!.kind.wire,
+-          'toCandidateId': event.toCandidate.id,
+-          'toKind': event.toCandidate.kind.wire,
+-          'reason': event.reason,
+-        },
+-      );
+-    } else if (event is ChannelCandidateTested) {
+-      return EventRecord.create(
+-        type: 'channel_candidate_tested',
+-        level: event.success ? EventLevel.debug : EventLevel.warning,
+-        sessionId: sid,
+-        timestamp: event.timestamp,
+-        message:
+-            'Tested candidate ${event.candidate.id} [${event.candidate.kind.wire}]: ${event.success ? "success" : "failed"}',
+-        data: {
+-          'candidateId': event.candidate.id,
+-          'kind': event.candidate.kind.wire,
+-          'success': event.success,
+-          if (event.rtt != null) 'rttMs': event.rtt!.inMilliseconds,
+-          if (event.error != null) 'error': event.error,
+-        },
+-      );
+-    }
+-    throw UnsupportedError('Unsupported ChannelEvent: ${event.runtimeType}');
+-  }
+-
+-  /// Constructs an [EventRecord] from a transfer [SessionRecord].
+-  factory EventRecord.fromSession(
+-    SessionRecord session, {
+-    required String message,
+-    String? type,
+-    EventLevel? level,
+-    Map<String, Object?> data = const {},
+-  }) {
+-    final shortFp = shortFingerprint(session.peerFingerprint);
+-    final eventLevel =
+-        level ??
+-        (session.status == TransferStatus.failed
+-            ? EventLevel.error
+-            : EventLevel.info);
+-
+-    final eventData = <String, Object?>{
+-      'role': session.role.wire,
+-      'peerDeviceId': session.peerDeviceId,
+-      'peerFingerprint': shortFp,
+-      'status': session.status.wire,
+-      if (session.failureReason != null)
+-        'failureReason': session.failureReason!.wire,
+-      'filesCount': session.files.length,
+-      'totalSize': session.totalSize,
+-      if (session.chosenCandidateId != null)
+-        'chosenCandidateId': session.chosenCandidateId,
+-      ...data,
+-    };
+-
+-    return EventRecord.create(
+-      type: type ?? 'session_${session.status.wire.toLowerCase()}',
+-      level: eventLevel,
+-      sessionId: session.sessionId,
+-      timestamp: session.updatedAt,
+-      message: message,
+-      data: eventData,
+-    );
+-  }
+-
+-  /// Constructs an error [EventRecord].
+-  factory EventRecord.error(
+-    String message, {
+-    String? type,
+-    String? sessionId,
+-    Object? error,
+-    StackTrace? stackTrace,
+-    Map<String, Object?> data = const {},
+-  }) {
+-    final eventData = <String, Object?>{
+-      if (error != null) 'error': error.toString(),
+-      if (stackTrace != null)
+-        'stackTrace': stackTrace.toString().split('\n').take(8).join('\n'),
+-      ...data,
+-    };
+-    return EventRecord.create(
+-      type: type ?? 'error',
+-      level: EventLevel.error,
+-      sessionId: sessionId,
+-      message: message,
+-      data: eventData,
+-    );
+-  }
+-
+-  /// Creates a copy of this event record with modified properties.
+-  EventRecord copyWith({
+-    String? id,
+-    DateTime? timestamp,
+-    String? type,
+-    EventLevel? level,
+-    String? sessionId,
+-    String? message,
+-    Map<String, Object?>? data,
+-  }) {
+-    return EventRecord(
+-      id: id ?? this.id,
+-      timestamp: timestamp ?? this.timestamp,
+-      type: type ?? this.type,
+-      level: level ?? this.level,
+-      sessionId: sessionId ?? this.sessionId,
+-      message: message ?? this.message,
+-      data: data ?? this.data,
+-    );
+-  }
+-
+-  Map<String, Object?> toJson() {
+-    final json = <String, Object?>{
+-      'id': id,
+-      'timestamp': timestamp.toUtc().toIso8601String(),
+-      'type': type,
+-      'level': level.wire,
+-      if (sessionId != null) 'sessionId': sessionId,
+-      'message': message,
+-      if (data.isNotEmpty) 'data': data,
+-    };
+-    assertNoSecretsInEvent(
+-      type: type,
+-      message: message,
+-      sessionId: sessionId,
+-      data: data,
+-    );
+-    return json;
+-  }
+-
+-  factory EventRecord.fromJson(Map<String, Object?> json) {
+-    final type = json['type']! as String;
+-    final message = json['message']! as String;
+-    final sessionId = json['sessionId'] as String?;
+-    final data = ((json['data'] as Map?) ?? const {}).cast<String, Object?>();
+-
+-    assertNoSecretsInEvent(
+-      type: type,
+-      message: message,
+-      sessionId: sessionId,
+-      data: data,
+-    );
+-
+-    return EventRecord(
+-      id: json['id']! as String,
+-      timestamp: DateTime.parse(json['timestamp']! as String).toUtc(),
+-      type: type,
+-      level: EventLevel.fromWire((json['level'] as String?) ?? 'info'),
+-      sessionId: sessionId,
+-      message: message,
+-      data: data,
+-    );
+-  }
+-
+-  /// Serializes this event to a single compact JSON line.
+-  String toJsonLine() => jsonEncode(toJson());
+-
+-  /// Deserializes an event from a single JSON line.
+-  factory EventRecord.fromJsonLine(String line) {
+-    final json = jsonDecode(line.trim()) as Map<String, Object?>;
+-    return EventRecord.fromJson(json);
+-  }
+-
+-  @override
+-  bool operator ==(Object other) =>
+-      identical(this, other) ||
+-      other is EventRecord &&
+-          runtimeType == other.runtimeType &&
+-          id == other.id &&
+-          timestamp == other.timestamp &&
+-          type == other.type &&
+-          level == other.level &&
+-          sessionId == other.sessionId &&
+-          message == other.message;
+-
+-  @override
+-  int get hashCode => Object.hash(id, timestamp, type, level, sessionId);
+-
+-  @override
+-  String toString() =>
+-      'EventRecord($id, [${level.wire}] $type, ${timestamp.toIso8601String()}'
+-      '${sessionId != null ? ", sid=$sessionId" : ""}: $message)';
+-}
 --- a/packages/libreshare_core/lib/src/storage/atomic_file.dart	1970-01-01 05:30:00.000000000 +0530
-+++ b/packages/libreshare_core/lib/src/storage/atomic_file.dart	2026-11-06 14:03:22.392248479 +0530
-@@ -0,0 +1,164 @@
++++ b/packages/libreshare_core/lib/src/storage/atomic_file.dart	2026-11-06 15:16:52.891588907 +0530
+@@ -0,0 +1,194 @@
 +/// Shared atomic-replace helper (E5 / R1b).
 +///
 +/// Contract: after a call the target holds exactly the new bytes or, on any
@@ -12,6 +2312,7 @@
 +
 +import 'dart:async';
 +import 'dart:io';
++import 'dart:math';
 +
 +import 'package:path/path.dart' as p;
 +
@@ -35,10 +2336,27 @@
 +  if (code == null) return false;
 +  return Platform.isWindows
 +      ? (code == 17 || code == 112 || code == 39) // NOT_SAME_DEVICE, DISK_FULL
-+      : (code == 18 || code == 28); // EXDEV, ENOSPC
++      : (code == 18 || code == 28 || code == 30 || code == 122);
++  // POSIX: EXDEV, ENOSPC, EROFS, EDQUOT (not EIO 5: tests simulate it)
 +}
 +
 +File _bakOf(File target) => File('${target.path}.bak');
++
++final Random _rng = Random();
++
++/// A backup name next to [target] that no existing entry uses (never collides
++/// with a user's own file).
++File _uniqueBak(File target) {
++  for (;;) {
++    final f = File(
++      '${target.path}.lsbak-${_rng.nextInt(1 << 32).toRadixString(16)}',
++    );
++    if (FileSystemEntity.typeSync(f.path, followLinks: false) ==
++        FileSystemEntityType.notFound) {
++      return f;
++    }
++  }
++}
 +
 +void _deleteQuietly(File f) {
 +  try {
@@ -114,7 +2432,7 @@
 +    } finally {
 +      await raf.close();
 +    }
-+    await atomicReplace(tmp, target);
++    await _replace(tmp, target, fixedBak: true);
 +  } on Object {
 +    try {
 +      if (tmp.existsSync()) await tmp.delete();
@@ -127,12 +2445,19 @@
 +
 +/// Renames [tmp] over [target]. [tmp] must exist (else [FileSystemException]
 +/// and [target] is untouched). On failure [target] keeps its old content and
-+/// [tmp] is left for the caller to clean up.
-+Future<void> atomicReplace(File tmp, File target) async {
++/// [tmp] is left for the caller to clean up. Safe for user-visible
++/// directories: it never reads, deletes or overwrites a file it did not
++/// create (its move-aside backup has a unique `.lsbak-<hex>` name).
++Future<void> atomicReplace(File tmp, File target) =>
++    _replace(tmp, target, fixedBak: false);
++
++/// [fixedBak] (app-owned files only): the backup is `<target>.bak`, a stale
++/// one is removed when the target exists, and one is removed after a commit.
++Future<void> _replace(File tmp, File target, {required bool fixedBak}) async {
 +  if (!tmp.existsSync()) {
 +    throw FileSystemException('temporary file is missing', tmp.path);
 +  }
-+  final bak = _bakOf(target);
++  File? bak;
 +  try {
 +    await _rename(tmp, target.path);
 +  } on FileSystemException catch (first) {
@@ -142,11 +2467,11 @@
 +      rethrow;
 +    }
 +    // Windows-style refusal to replace: move the old file aside, never delete
-+    // it before the new one is committed. The target is newer than a stale
-+    // backup, so that one may go.
-+    _deleteQuietly(bak);
++    // it before the new one is committed.
++    final b = bak = fixedBak ? _bakOf(target) : _uniqueBak(target);
++    if (fixedBak) _deleteQuietly(b); // target exists, so the bak is older
 +    try {
-+      await _rename(target, bak.path);
++      await _rename(target, b.path);
 +    } on Object {
 +      throw first; // old file is still in place
 +    }
@@ -154,18 +2479,23 @@
 +      await _rename(tmp, target.path);
 +    } on Object {
 +      try {
-+        await _rename(bak, target.path);
++        await _rename(b, target.path);
 +      } on Object {
-+        // double failure: the old data stays in <target>.bak
-+        // (see recoverAtomicBackup)
++        // double failure: the old data stays in the backup file
++        // (see recoverAtomicBackup for the fixed name)
 +      }
 +      throw first;
 +    }
 +  }
-+  // Committed: any backup is older than the new target.
-+  _deleteQuietly(bak);
++  // Committed. Only a backup we made (or, for app-owned files, the fixed
++  // `.bak`) is removed.
++  if (bak != null) {
++    _deleteQuietly(bak);
++  } else if (fixedBak) {
++    _deleteQuietly(_bakOf(target));
++  }
 +}
---- a/packages/libreshare_core/lib/src/storage/file_secret_store.dart	2026-11-04 22:24:20.756770471 +0530
+--- a/packages/libreshare_core/lib/src/storage/file_secret_store.dart	2026-11-06 16:53:32.332309004 +0530
 +++ b/packages/libreshare_core/lib/src/storage/file_secret_store.dart	2026-11-06 12:06:52.039955147 +0530
 @@ -28,6 +28,7 @@
  import 'package:meta/meta.dart';
@@ -211,7 +2541,7 @@
  }
  
  // File framing: "LSS1" | u32be length | payload | SHA-256(everything before).
---- a/packages/libreshare_core/lib/src/storage/receive_settings_store.dart	2026-11-03 03:36:13.807984471 +0530
+--- a/packages/libreshare_core/lib/src/storage/receive_settings_store.dart	2026-11-06 16:53:32.332309004 +0530
 +++ b/packages/libreshare_core/lib/src/storage/receive_settings_store.dart	2026-11-06 12:06:47.262309973 +0530
 @@ -10,6 +10,7 @@
  import 'package:logging/logging.dart';
@@ -245,7 +2575,695 @@
 -    await tmp.rename(file.path);
    }
  }
---- a/packages/libreshare_core/lib/src/transfer/file_receiver.dart	2026-11-05 19:26:29.796077054 +0530
+--- a/packages/libreshare_core/lib/src/storage/session_record.dart	2026-11-06 16:53:32.332309004 +0530
++++ b/packages/libreshare_core/lib/src/storage/session_record.dart	1970-01-01 05:30:00.000000000 +0530
+@@ -1,327 +0,0 @@
+-// ignore_for_file: depend_on_referenced_packages
+-/// Session persistence models for LibreShare (Increment 4, Decision D2).
+-///
+-/// Encapsulates persistent state for both receiver and sender sessions, binding
+-/// partial download files and chunk progress to the authenticated peer's identity.
+-///
+-/// Security Invariants:
+-/// 1. ZERO SECRET LEAKS: Session records MUST NEVER store PINs, bearer tokens,
+-///    private keys, or SAS nonces. All authentication is renewed on resume.
+-/// 2. PEER BINDING: Partial files can only be adopted if the resume request comes
+-///    from a peer presenting the matching [peerFingerprint].
+-/// 3. 24H TTL: Sessions older than 24 hours are expired and evicted.
+-library;
+-
+-import '../model/session_models.dart';
+-import '../model/transfer_status.dart';
+-
+-/// Forbidden keys that must never appear in persisted session records.
+-const Set<String> kForbiddenSecretKeys = {
+-  'pin',
+-  'token',
+-  'secret',
+-  'privatekey',
+-  'private_key',
+-  'nonce',
+-  'sascommit',
+-  'sas_commit',
+-  'keyb64',
+-  'password',
+-  'authheader',
+-  'x-ls-auth',
+-  'bearer',
+-  'authorization',
+-  'shared_secret',
+-  'private',
+-  'master_key',
+-  'credential',
+-};
+-
+-/// Validates that [map] contains no forbidden secret keys recursively.
+-void assertNoSecretKeys(Map<String, Object?> map) {
+-  for (final key in map.keys) {
+-    if (kForbiddenSecretKeys.contains(key.toLowerCase())) {
+-      throw ArgumentError(
+-        'Security violation: SessionRecord must never persist secret: $key',
+-      );
+-    }
+-    final val = map[key];
+-    if (val is Map) {
+-      assertNoSecretKeys(val.cast<String, Object?>());
+-    } else if (val is List) {
+-      for (final item in val) {
+-        if (item is Map) {
+-          assertNoSecretKeys(item.cast<String, Object?>());
+-        }
+-      }
+-    }
+-  }
+-}
+-
+-/// The role of the local peer in the transfer session.
+-enum SessionRole {
+-  sender('sender'),
+-  receiver('receiver');
+-
+-  const SessionRole(this.wire);
+-  final String wire;
+-
+-  static SessionRole fromWire(String wire) {
+-    for (final role in SessionRole.values) {
+-      if (role.wire == wire) return role;
+-    }
+-    throw ArgumentError.value(wire, 'wire', 'Unknown session role');
+-  }
+-}
+-
+-/// Persistent record of an individual file within a session.
+-class SessionFileRecord {
+-  const SessionFileRecord({
+-    required this.fileId,
+-    required this.name,
+-    required this.size,
+-    required this.chunkSize,
+-    required this.chunkCount,
+-    this.sha256,
+-    this.partialPath,
+-    this.receivedRanges = const [],
+-    this.isComplete = false,
+-  }) : assert(size >= 0, 'size must be non-negative'),
+-       assert(chunkSize > 0, 'chunkSize must be positive'),
+-       assert(chunkCount >= 0, 'chunkCount must be non-negative');
+-
+-  /// Unique file identifier within the session.
+-  final String fileId;
+-
+-  /// Sanitized relative file path or name.
+-  final String name;
+-
+-  /// Total expected file size in bytes.
+-  final int size;
+-
+-  /// Chunk size used for transfer partitioning (typically 4 MiB).
+-  final int chunkSize;
+-
+-  /// Total number of chunks in this file.
+-  final int chunkCount;
+-
+-  /// Expected SHA-256 digest of the complete file, if declared in manifest.
+-  final String? sha256;
+-
+-  /// Path to the in-progress partial file (`.lspart`), if local to receiver.
+-  final String? partialPath;
+-
+-  /// Inclusive ranges of acknowledged chunk indices (e.g. `[[0, 4], [8, 8]]`).
+-  final ChunkRanges receivedRanges;
+-
+-  /// Whether all chunks have been received and verified.
+-  final bool isComplete;
+-
+-  /// Total number of acknowledged received chunks.
+-  int get receivedChunkCount {
+-    var count = 0;
+-    for (final range in receivedRanges) {
+-      if (range.length == 2 && range[1] >= range[0]) {
+-        count += (range[1] - range[0] + 1);
+-      }
+-    }
+-    return count;
+-  }
+-
+-  /// Creates a copy of this file record with updated properties.
+-  SessionFileRecord copyWith({
+-    String? fileId,
+-    String? name,
+-    int? size,
+-    int? chunkSize,
+-    int? chunkCount,
+-    String? sha256,
+-    String? partialPath,
+-    ChunkRanges? receivedRanges,
+-    bool? isComplete,
+-  }) {
+-    return SessionFileRecord(
+-      fileId: fileId ?? this.fileId,
+-      name: name ?? this.name,
+-      size: size ?? this.size,
+-      chunkSize: chunkSize ?? this.chunkSize,
+-      chunkCount: chunkCount ?? this.chunkCount,
+-      sha256: sha256 ?? this.sha256,
+-      partialPath: partialPath ?? this.partialPath,
+-      receivedRanges: receivedRanges ?? this.receivedRanges,
+-      isComplete: isComplete ?? this.isComplete,
+-    );
+-  }
+-
+-  Map<String, Object?> toJson() => {
+-    'fileId': fileId,
+-    'name': name,
+-    'size': size,
+-    'chunkSize': chunkSize,
+-    'chunkCount': chunkCount,
+-    if (sha256 != null) 'sha256': sha256,
+-    if (partialPath != null) 'partialPath': partialPath,
+-    'receivedRanges': receivedRanges,
+-    'isComplete': isComplete,
+-  };
+-
+-  factory SessionFileRecord.fromJson(Map<String, Object?> json) {
+-    assertNoSecretKeys(json);
+-    return SessionFileRecord(
+-      fileId: json['fileId']! as String,
+-      name: json['name']! as String,
+-      size: json['size']! as int,
+-      chunkSize: json['chunkSize']! as int,
+-      chunkCount: json['chunkCount']! as int,
+-      sha256: json['sha256'] as String?,
+-      partialPath: json['partialPath'] as String?,
+-      receivedRanges: ((json['receivedRanges'] as List?) ?? const [])
+-          .map((r) => (r as List).cast<int>())
+-          .toList(),
+-      isComplete: (json['isComplete'] as bool?) ?? false,
+-    );
+-  }
+-}
+-
+-/// Persistent record of an active, paused, or completed transfer session.
+-class SessionRecord {
+-  const SessionRecord({
+-    required this.sessionId,
+-    required this.role,
+-    required this.peerDeviceId,
+-    required this.peerFingerprint,
+-    required this.status,
+-    this.failureReason,
+-    required this.files,
+-    required this.totalSize,
+-    this.chosenCandidateId,
+-    required this.createdAt,
+-    required this.updatedAt,
+-    this.extraMetadata = const {},
+-  }) : assert(sessionId.length > 0, 'sessionId must not be empty'),
+-       assert(peerDeviceId.length > 0, 'peerDeviceId must not be empty'),
+-       assert(peerFingerprint.length > 0, 'peerFingerprint must not be empty');
+-
+-  /// Unique session UUID.
+-  final String sessionId;
+-
+-  /// Role of the local host in this session (sender or receiver).
+-  final SessionRole role;
+-
+-  /// Device ID of the remote peer.
+-  final String peerDeviceId;
+-
+-  /// SHA-256 pinned certificate fingerprint of the remote peer.
+-  ///
+-  /// Invariant: Resume is only permitted if the peer authenticates with this fingerprint.
+-  final String peerFingerprint;
+-
+-  /// Current transfer status.
+-  final TransferStatus status;
+-
+-  /// Detailed cause if status is [TransferStatus.failed].
+-  final FailureReason? failureReason;
+-
+-  /// Files included in this transfer session.
+-  final List<SessionFileRecord> files;
+-
+-  /// Total size of all files in bytes.
+-  final int totalSize;
+-
+-  /// ID of the candidate network path used by sender, if known.
+-  final String? chosenCandidateId;
+-
+-  /// Session creation timestamp.
+-  final DateTime createdAt;
+-
+-  /// Last observed activity or chunk transmission timestamp.
+-  final DateTime updatedAt;
+-
+-  /// Non-secret extension properties.
+-  final Map<String, Object?> extraMetadata;
+-
+-  /// Returns true if this session has exceeded [maxAge] since [updatedAt].
+-  bool isExpired(DateTime now, {Duration maxAge = const Duration(hours: 24)}) {
+-    return now.difference(updatedAt) > maxAge;
+-  }
+-
+-  /// Creates a copy of this session record with updated properties.
+-  SessionRecord copyWith({
+-    String? sessionId,
+-    SessionRole? role,
+-    String? peerDeviceId,
+-    String? peerFingerprint,
+-    TransferStatus? status,
+-    FailureReason? failureReason,
+-    List<SessionFileRecord>? files,
+-    int? totalSize,
+-    String? chosenCandidateId,
+-    DateTime? createdAt,
+-    DateTime? updatedAt,
+-    Map<String, Object?>? extraMetadata,
+-  }) {
+-    return SessionRecord(
+-      sessionId: sessionId ?? this.sessionId,
+-      role: role ?? this.role,
+-      peerDeviceId: peerDeviceId ?? this.peerDeviceId,
+-      peerFingerprint: peerFingerprint ?? this.peerFingerprint,
+-      status: status ?? this.status,
+-      failureReason: failureReason ?? this.failureReason,
+-      files: files ?? this.files,
+-      totalSize: totalSize ?? this.totalSize,
+-      chosenCandidateId: chosenCandidateId ?? this.chosenCandidateId,
+-      createdAt: createdAt ?? this.createdAt,
+-      updatedAt: updatedAt ?? this.updatedAt,
+-      extraMetadata: extraMetadata ?? this.extraMetadata,
+-    );
+-  }
+-
+-  Map<String, Object?> toJson() {
+-    final json = <String, Object?>{
+-      'sessionId': sessionId,
+-      'role': role.wire,
+-      'peerDeviceId': peerDeviceId,
+-      'peerFingerprint': peerFingerprint,
+-      'status': status.wire,
+-      if (failureReason != null) 'failureReason': failureReason!.wire,
+-      'files': files.map((f) => f.toJson()).toList(),
+-      'totalSize': totalSize,
+-      if (chosenCandidateId != null) 'chosenCandidateId': chosenCandidateId,
+-      'createdAt': createdAt.toUtc().toIso8601String(),
+-      'updatedAt': updatedAt.toUtc().toIso8601String(),
+-      if (extraMetadata.isNotEmpty) 'extraMetadata': extraMetadata,
+-    };
+-    assertNoSecretKeys(json);
+-    return json;
+-  }
+-
+-  factory SessionRecord.fromJson(Map<String, Object?> json) {
+-    assertNoSecretKeys(json);
+-    return SessionRecord(
+-      sessionId: json['sessionId']! as String,
+-      role: SessionRole.fromWire(json['role']! as String),
+-      peerDeviceId: json['peerDeviceId']! as String,
+-      peerFingerprint: json['peerFingerprint']! as String,
+-      status: TransferStatus.fromWire(json['status']! as String),
+-      failureReason: FailureReason.fromWire(json['failureReason'] as String?),
+-      files: (json['files']! as List)
+-          .map(
+-            (f) =>
+-                SessionFileRecord.fromJson((f as Map).cast<String, Object?>()),
+-          )
+-          .toList(),
+-      totalSize: json['totalSize']! as int,
+-      chosenCandidateId: json['chosenCandidateId'] as String?,
+-      createdAt: DateTime.parse(json['createdAt']! as String),
+-      updatedAt: DateTime.parse(json['updatedAt']! as String),
+-      extraMetadata: ((json['extraMetadata'] as Map?) ?? const {})
+-          .cast<String, Object?>(),
+-    );
+-  }
+-
+-  @override
+-  String toString() =>
+-      'SessionRecord($sessionId, role=${role.wire}, peer=$peerDeviceId, '
+-      'status=${status.wire}${failureReason != null ? " ($failureReason)" : ""}, '
+-      'files=${files.length}, size=$totalSize)';
+-}
+--- a/packages/libreshare_core/lib/src/storage/session_store.dart	2026-11-06 16:53:32.332309004 +0530
++++ b/packages/libreshare_core/lib/src/storage/session_store.dart	1970-01-01 05:30:00.000000000 +0530
+@@ -1,355 +0,0 @@
+-// ignore_for_file: depend_on_referenced_packages
+-/// Session storage subsystem for LibreShare (Increment 4, Decision D2).
+-///
+-/// Provides atomic persistence for [SessionRecord] metadata and chunk bitmap progress.
+-/// Ensures session continuity across receiver crashes/restarts without permitting
+-/// unauthenticated partial file adoption.
+-///
+-/// Security & Operational Invariants:
+-/// 1. POSIX Permissions: Mode 0600 on session files, mode 0700 on the storage directory.
+-/// 2. Atomic Writes: Writes to `<target>.tmp`, flushes, and atomically renames.
+-/// 3. Zero Secret Leaks: Validates no secret keys exist before writing.
+-/// 4. 24h TTL Eviction: Expired sessions are swept and deleted.
+-library;
+-
+-import 'dart:async';
+-import 'dart:convert';
+-import 'dart:io';
+-
+-import 'package:libreshare_core/libreshare_core.dart';
+-
+-/// Exception thrown when a session store operation fails.
+-class SessionStoreException implements Exception {
+-  const SessionStoreException(this.message, [this.cause]);
+-
+-  final String message;
+-  final Object? cause;
+-
+-  @override
+-  String toString() =>
+-      'SessionStoreException: $message${cause != null ? " (cause: $cause)" : ""}';
+-}
+-
+-/// Abstract interface for session persistence.
+-abstract interface class SessionStore {
+-  /// Initializes the store and ensures storage directories are ready.
+-  Future<void> init();
+-
+-  /// Retrieves a session record by its [sessionId].
+-  ///
+-  /// Returns `null` if the session does not exist or has expired.
+-  Future<SessionRecord?> getSession(String sessionId);
+-
+-  /// Saves or updates a session record atomically.
+-  ///
+-  /// Security: Throws [ArgumentError] if the record contains secret fields.
+-  Future<void> saveSession(SessionRecord record);
+-
+-  /// Permanently removes a session record.
+-  Future<void> deleteSession(String sessionId);
+-
+-  /// Lists all stored session records, optionally filtered by [role].
+-  Future<List<SessionRecord>> listSessions({SessionRole? role});
+-
+-  /// Deletes session records older than [maxAge] (default: 24 hours).
+-  ///
+-  /// Returns the number of evicted session records.
+-  Future<int> sweepExpired({Duration maxAge = const Duration(hours: 24)});
+-
+-  /// Closes the store and flushes any pending writes.
+-  Future<void> close();
+-}
+-
+-Future<int> _defaultChmod(String mode, String path) async {
+-  if (Platform.isWindows) return 0;
+-  final r = await Process.run('chmod', [mode, path]);
+-  return r.exitCode;
+-}
+-
+-/// File-backed implementation of [SessionStore] using atomic JSON files.
+-class FileSessionStore implements SessionStore {
+-  FileSessionStore(
+-    this.directory, {
+-    this._clock = const SystemClock(),
+-    ChmodRunner? chmodRunner,
+-  }) : _chmod = chmodRunner ?? _defaultChmod;
+-
+-  /// Directory containing the `sessions/` JSON files.
+-  final Directory directory;
+-
+-  final Clock _clock;
+-  final ChmodRunner _chmod;
+-  final Map<String, Future<void>> _locks = {};
+-  bool _closed = false;
+-
+-  File _fileFor(String sessionId) =>
+-      File('${directory.path}${Platform.pathSeparator}$sessionId.json');
+-
+-  void _checkOpen() {
+-    if (_closed) throw const SessionStoreException('SessionStore is closed');
+-  }
+-
+-  @override
+-  Future<void> init() async {
+-    _checkOpen();
+-    if (!await directory.exists()) {
+-      await directory.create(recursive: true);
+-      await _chmod('0700', directory.path);
+-    }
+-  }
+-
+-  @override
+-  Future<SessionRecord?> getSession(String sessionId) async {
+-    _checkOpen();
+-    final file = _fileFor(sessionId);
+-    if (!await file.exists()) return null;
+-
+-    try {
+-      final text = await file.readAsString();
+-      final json = jsonDecode(text) as Map<String, Object?>;
+-      final record = SessionRecord.fromJson(json);
+-
+-      // Check TTL
+-      if (record.isExpired(_clock.now())) {
+-        await deleteSession(sessionId);
+-        return null;
+-      }
+-      return record;
+-    } on FormatException {
+-      // Corrupt file - return null rather than crashing
+-      return null;
+-    } on Object catch (e) {
+-      throw SessionStoreException('Failed to read session $sessionId', e);
+-    }
+-  }
+-
+-  @override
+-  Future<void> saveSession(SessionRecord record) async {
+-    _checkOpen();
+-    await init();
+-
+-    // Serialize and enforce zero secret leaks
+-    final json = record.toJson();
+-    final payload = const JsonEncoder.withIndent('  ').convert(json);
+-    final target = _fileFor(record.sessionId);
+-    final tmp = File('${target.path}.tmp');
+-
+-    // Synchronize writes to the same session file
+-    final prev = _locks[record.sessionId] ?? Future<void>.value();
+-    final completer = Completer<void>();
+-    _locks[record.sessionId] = completer.future;
+-
+-    try {
+-      await prev;
+-
+-      // Atomic write sequence:
+-      // 1. Write to .tmp file
+-      // 2. Chmod 0600 on tmp
+-      // 3. Flush to disk
+-      // 4. Rename over target
+-      await tmp.writeAsString(payload, flush: true);
+-      await _chmod('0600', tmp.path);
+-      await tmp.rename(target.path);
+-    } on Object catch (e) {
+-      try {
+-        if (await tmp.exists()) await tmp.delete();
+-      } catch (_) {}
+-      throw SessionStoreException(
+-        'Failed to save session ${record.sessionId}',
+-        e,
+-      );
+-    } finally {
+-      completer.complete();
+-      if (identical(_locks[record.sessionId], completer.future)) {
+-        unawaited(_locks.remove(record.sessionId));
+-      }
+-    }
+-  }
+-
+-  @override
+-  Future<void> deleteSession(String sessionId) async {
+-    _checkOpen();
+-    final file = _fileFor(sessionId);
+-    final tmp = File('${file.path}.tmp');
+-    try {
+-      if (await file.exists()) await file.delete();
+-      if (await tmp.exists()) await tmp.delete();
+-    } on Object catch (e) {
+-      throw SessionStoreException('Failed to delete session $sessionId', e);
+-    }
+-  }
+-
+-  @override
+-  Future<List<SessionRecord>> listSessions({SessionRole? role}) async {
+-    _checkOpen();
+-    if (!await directory.exists()) return [];
+-
+-    final records = <SessionRecord>[];
+-    final now = _clock.now();
+-
+-    await for (final entity in directory.list(followLinks: false)) {
+-      if (entity is! File || !entity.path.endsWith('.json')) continue;
+-      try {
+-        final text = await entity.readAsString();
+-        final json = jsonDecode(text) as Map<String, Object?>;
+-        final record = SessionRecord.fromJson(json);
+-
+-        if (record.isExpired(now)) {
+-          try {
+-            await entity.delete();
+-          } catch (_) {}
+-          continue;
+-        }
+-
+-        if (role == null || record.role == role) {
+-          records.add(record);
+-        }
+-      } catch (_) {
+-        // Skip invalid/unreadable session files
+-      }
+-    }
+-    return records;
+-  }
+-
+-  @override
+-  Future<int> sweepExpired({
+-    Duration maxAge = const Duration(hours: 24),
+-  }) async {
+-    _checkOpen();
+-    if (!await directory.exists()) return 0;
+-
+-    var evicted = 0;
+-    final now = _clock.now();
+-
+-    await for (final entity in directory.list(followLinks: false)) {
+-      if (entity is! File) continue;
+-
+-      // Clean up orphaned .tmp files older than 1 hour
+-      if (entity.path.endsWith('.json.tmp')) {
+-        try {
+-          final stat = await entity.stat();
+-          if (now.difference(stat.modified) > const Duration(hours: 1)) {
+-            await entity.delete();
+-          }
+-        } catch (_) {}
+-        continue;
+-      }
+-
+-      if (!entity.path.endsWith('.json')) continue;
+-
+-      try {
+-        final text = await entity.readAsString();
+-        final json = jsonDecode(text) as Map<String, Object?>;
+-        final record = SessionRecord.fromJson(json);
+-
+-        if (record.isExpired(now, maxAge: maxAge)) {
+-          await entity.delete();
+-          evicted++;
+-        }
+-      } catch (_) {
+-        // Corrupt file or unparseable JSON: if modified > maxAge, remove it
+-        try {
+-          final stat = await entity.stat();
+-          if (now.difference(stat.modified) > maxAge) {
+-            await entity.delete();
+-            evicted++;
+-          }
+-        } catch (_) {}
+-      }
+-    }
+-    return evicted;
+-  }
+-
+-  @override
+-  Future<void> close() async {
+-    _closed = true;
+-    _locks.clear();
+-  }
+-}
+-
+-/// In-memory implementation of [SessionStore] for testing.
+-class InMemorySessionStore implements SessionStore {
+-  InMemorySessionStore({this._clock = const SystemClock()});
+-
+-  final Clock _clock;
+-  final Map<String, SessionRecord> _sessions = {};
+-  bool _closed = false;
+-
+-  void _checkOpen() {
+-    if (_closed) throw const SessionStoreException('SessionStore is closed');
+-  }
+-
+-  @override
+-  Future<void> init() async {
+-    _checkOpen();
+-  }
+-
+-  @override
+-  Future<SessionRecord?> getSession(String sessionId) async {
+-    _checkOpen();
+-    final record = _sessions[sessionId];
+-    if (record == null) return null;
+-    if (record.isExpired(_clock.now())) {
+-      _sessions.remove(sessionId);
+-      return null;
+-    }
+-    return record;
+-  }
+-
+-  @override
+-  Future<void> saveSession(SessionRecord record) async {
+-    _checkOpen();
+-    // Validate no secret leaks
+-    record.toJson();
+-    _sessions[record.sessionId] = record;
+-  }
+-
+-  @override
+-  Future<void> deleteSession(String sessionId) async {
+-    _checkOpen();
+-    _sessions.remove(sessionId);
+-  }
+-
+-  @override
+-  Future<List<SessionRecord>> listSessions({SessionRole? role}) async {
+-    _checkOpen();
+-    final now = _clock.now();
+-    final expired = <String>[];
+-    final result = <SessionRecord>[];
+-
+-    for (final entry in _sessions.entries) {
+-      if (entry.value.isExpired(now)) {
+-        expired.add(entry.key);
+-      } else if (role == null || entry.value.role == role) {
+-        result.add(entry.value);
+-      }
+-    }
+-    for (final key in expired) {
+-      _sessions.remove(key);
+-    }
+-    return result;
+-  }
+-
+-  @override
+-  Future<int> sweepExpired({
+-    Duration maxAge = const Duration(hours: 24),
+-  }) async {
+-    _checkOpen();
+-    final now = _clock.now();
+-    final expired = _sessions.entries
+-        .where((e) => e.value.isExpired(now, maxAge: maxAge))
+-        .map((e) => e.key)
+-        .toList();
+-
+-    for (final key in expired) {
+-      _sessions.remove(key);
+-    }
+-    return expired.length;
+-  }
+-
+-  @override
+-  Future<void> close() async {
+-    _closed = true;
+-    _sessions.clear();
+-  }
+-}
+--- a/packages/libreshare_core/lib/src/transfer/file_receiver.dart	2026-11-06 16:53:32.331309008 +0530
 +++ b/packages/libreshare_core/lib/src/transfer/file_receiver.dart	2026-11-06 12:06:52.037940036 +0530
 @@ -37,6 +37,7 @@
  import '../model/transfer_status.dart';
@@ -255,7 +3273,83 @@
  import 'chunker.dart';
  import 'filename_sanitizer.dart';
  import 'resume_store.dart';
-@@ -906,7 +907,7 @@
+@@ -73,11 +74,6 @@
+   bool discarded = false; // partial + sidecar deleted; never flush again
+   FileVerification? verification;
+   Future<FileVerification>? completion;
+-
+-  _DigestCapture? runningCapture;
+-  ByteConversionSink? runningHasher;
+-  int nextExpectedChunkIndex = 0;
+-  bool canUseRunningHash = true;
+ }
+ 
+ class _Session {
+@@ -702,20 +698,6 @@
+     final hasher = sha256.startChunkedConversion(capture);
+     var received = 0;
+     RandomAccessFile? raf;
+-
+-    final inOrderForRunning =
+-        f.canUseRunningHash && index == f.nextExpectedChunkIndex && !already;
+-    if (inOrderForRunning) {
+-      f.runningHasher ??= sha256.startChunkedConversion(
+-        f.runningCapture = _DigestCapture(),
+-      );
+-    } else {
+-      f.canUseRunningHash = false;
+-      f.runningHasher?.close();
+-      f.runningHasher = null;
+-      f.runningCapture = null;
+-    }
+-
+     try {
+       if (!already) {
+         raf = await f.partial.open(mode: FileMode.append);
+@@ -728,9 +710,6 @@
+           );
+         }
+         hasher.add(piece);
+-        if (inOrderForRunning && f.runningHasher != null) {
+-          f.runningHasher!.add(piece);
+-        }
+         if (raf != null && piece.isNotEmpty) {
+           await raf.setPosition(range.start + received);
+           await raf.writeFrom(piece);
+@@ -745,20 +724,11 @@
+       }
+       hasher.close();
+       if (expectedHash != null && capture.value.toString() != expectedHash) {
+-        if (inOrderForRunning) {
+-          f.canUseRunningHash = false;
+-          f.runningHasher?.close();
+-          f.runningHasher = null;
+-          f.runningCapture = null;
+-        }
+         throw LsException(
+           LsErrorCode.chunkHashMismatch,
+           'chunk $index failed its SHA-256 check',
+         );
+       }
+-      if (inOrderForRunning) {
+-        f.nextExpectedChunkIndex++;
+-      }
+     } on FileSystemException catch (e) {
+       if (s.status != TransferStatus.inProgress) _throwStateError(s);
+       if (_isDiskFull(e)) {
+@@ -867,11 +837,6 @@
+       final String actual;
+       if (length != item.size) {
+         actual = 'size-mismatch';
+-      } else if (f.canUseRunningHash &&
+-          f.nextExpectedChunkIndex == item.chunkCount &&
+-          f.runningCapture != null) {
+-        f.runningHasher?.close();
+-        actual = f.runningCapture!.value.toString();
+       } else {
+         final path = f.partial.path;
+         actual = await Isolate.run(() => _sha256OfFile(path));
+@@ -942,7 +907,7 @@
        await f.target.parent.create(recursive: true);
      }
      try {
@@ -264,7 +3358,7 @@
      } on FileSystemException {
        if (partialDir == null) rethrow;
        // Different file system: copy next to the target, then rename.
-@@ -915,7 +916,7 @@
+@@ -951,7 +916,7 @@
        );
        try {
          await f.partial.copy(tmp.path);
@@ -273,7 +3367,824 @@
        } catch (_) {
          _deleteQuietly(tmp);
          rethrow;
---- a/packages/libreshare_core/lib/src/transfer/resume_store.dart	2026-11-03 02:04:13.113924701 +0530
+@@ -1355,10 +1320,6 @@
+ 
+   Future<void> _discard(_FileEntry f) async {
+     f.discarded = true;
+-    f.runningHasher?.close();
+-    f.runningHasher = null;
+-    f.runningCapture = null;
+-    f.canUseRunningHash = false;
+     final store = f.store;
+     if (store != null) {
+       await store.discard();
+--- a/packages/libreshare_core/lib/src/transfer/file_sender.dart	2026-11-06 16:53:32.331309008 +0530
++++ b/packages/libreshare_core/lib/src/transfer/file_sender.dart	2026-11-05 08:41:56.384526094 +0530
+@@ -587,36 +587,17 @@
+   ) async {
+     final item = entry.item;
+     final r = chunker.range(item.size, index);
+-
+-    // Read chunk into single in-memory buffer: eliminates double disk read and isolate overhead
+-    final raf = await entry.file.open(mode: FileMode.read);
+-    final Uint8List chunkBytes;
+-    try {
+-      await raf.setPosition(r.start);
+-      final buf = Uint8List(r.length);
+-      final read = await raf.readInto(buf);
+-      if (read != r.length) {
+-        throw FileSystemException(
+-          'File shorter than expected: chunk $index has $read of ${r.length} bytes',
+-          entry.file.path,
+-        );
+-      }
+-      chunkBytes = buf;
+-    } finally {
+-      await raf.close();
+-    }
+-
+-    final hash = sha256OfBytes(chunkBytes);
++    // Pass 1: hash the chunk by streaming it (never held in memory).
++    final hash = await sha256OfChunk(entry.file, r);
+     run.throwIfAborted();
+-
+-    // Stream single-pass chunk buffer for the upload
++    // Pass 2: stream it again for the upload; retries re-open the stream.
+     await _retry(
+       run,
+       () => client.putChunk(
+         run.sessionId,
+         item.fileId,
+         index,
+-        Stream.value(chunkBytes),
++        chunker.openChunk(entry.file, r),
+         length: r.length,
+         chunkSha256: hash,
+         token: token,
+--- a/packages/libreshare_core/lib/src/transfer/hashing.dart	2026-11-06 16:53:32.331309008 +0530
++++ b/packages/libreshare_core/lib/src/transfer/hashing.dart	2026-11-03 01:57:39.854519467 +0530
+@@ -14,38 +14,13 @@
+ const String kSha256Empty =
+     'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+ 
+-/// Pluggable SHA-256 provider interface for hardware acceleration (e.g. in Flutter app).
+-abstract interface class Sha256Provider {
+-  /// Synchronous or fast SHA-256 of in-memory bytes, lowercase hex.
+-  String hashBytes(List<int> bytes);
+-
+-  /// Incremental or streamed SHA-256 of a stream of bytes, lowercase hex.
+-  Future<String> hashStream(Stream<List<int>> input);
+-}
+-
+-/// Standard pure-Dart SHA-256 provider using package:crypto.
+-class PureDartSha256Provider implements Sha256Provider {
+-  const PureDartSha256Provider();
+-
+-  @override
+-  String hashBytes(List<int> bytes) => sha256.convert(bytes).toString();
+-
+-  @override
+-  Future<String> hashStream(Stream<List<int>> input) async =>
+-      (await _hashStream(input)).hex;
+-}
+-
+-/// Active global SHA-256 provider. Defaults to pure Dart; app layer may inject
+-/// a platform-accelerated provider.
+-Sha256Provider activeSha256Provider = const PureDartSha256Provider();
+-
+ /// SHA-256 of an in-memory byte list, lowercase hex.
+-String sha256OfBytes(List<int> bytes) => activeSha256Provider.hashBytes(bytes);
++String sha256OfBytes(List<int> bytes) => sha256.convert(bytes).toString();
+ 
+ /// SHA-256 of [input], consuming it incrementally (memory bounded by the
+ /// stream's own chunk size). Returns lowercase hex.
+-Future<String> sha256OfStream(Stream<List<int>> input) =>
+-    activeSha256Provider.hashStream(input);
++Future<String> sha256OfStream(Stream<List<int>> input) async =>
++    (await _hashStream(input)).hex;
+ 
+ /// SHA-256 of the whole [file], streamed from disk inside a background
+ /// [Isolate] (constant memory, event loop of the caller stays free).
+--- a/packages/libreshare_core/lib/src/transfer/idle_timeout_manager.dart	2026-11-06 16:53:32.331309008 +0530
++++ b/packages/libreshare_core/lib/src/transfer/idle_timeout_manager.dart	1970-01-01 05:30:00.000000000 +0530
+@@ -1,264 +0,0 @@
+-// ignore_for_file: depend_on_referenced_packages
+-/// Chunk idle timeout management for active receiver sessions (Increment 4, P4-5).
+-///
+-/// Implements the 30-second chunk idle timeout window specified in LSP-1 and
+-/// Increment 4 Decision D4. If no chunk is received within 30 seconds for an active
+-/// session:
+-/// 1. Session state transitions to FAILED(TIMEOUT).
+-/// 2. Reserved filenames and ports are released.
+-/// 3. In-progress `.lspart` data and bitmap sidecars are preserved on disk for resume.
+-/// 4. A [SessionFinished] event is emitted with failure reason 'TIMEOUT'.
+-library;
+-
+-import 'dart:async';
+-
+-import 'package:libreshare_core/libreshare_core.dart';
+-import 'package:logging/logging.dart';
+-
+-final Logger _log = Logger('IdleTimeoutManager');
+-
+-/// Default chunk idle timeout on LAN/Wi-Fi transfers (spec §6, Inc 4 Decision D4).
+-const Duration kDefaultChunkIdleTimeout = Duration(seconds: 30);
+-
+-/// Action callback invoked when a session times out due to chunk inactivity.
+-typedef SessionTimeoutCallback = FutureOr<void> Function(String sessionId);
+-
+-/// Timer factory function allowing injectable timers for unit testing.
+-typedef TimerFactory = Timer Function(
+-  Duration duration,
+-  void Function() callback,
+-);
+-
+-class _SessionIdleEntry {
+-  _SessionIdleEntry({
+-    required this.sessionId,
+-    required this.lastActivity,
+-    required this.timeout,
+-    this.onTimeout,
+-  });
+-
+-  final String sessionId;
+-  DateTime lastActivity;
+-  final Duration timeout;
+-  final SessionTimeoutCallback? onTimeout;
+-  Timer? timer;
+-  bool isTimedOut = false;
+-}
+-
+-/// Manages chunk idle timers for active sessions with an injectable [Clock].
+-class IdleTimeoutManager {
+-  IdleTimeoutManager({
+-    this.defaultTimeout = kDefaultChunkIdleTimeout,
+-    this.clock = const SystemClock(),
+-    this.onTimeout,
+-    TimerFactory? timerFactory,
+-  }) : _timerFactory = timerFactory ?? ((d, cb) => Timer(d, cb));
+-
+-  /// Default idle timeout duration applied to registered sessions (default: 30s).
+-  final Duration defaultTimeout;
+-
+-  /// Injected clock for deterministic testing and monotonic time tracking.
+-  final Clock clock;
+-
+-  /// Global callback triggered whenever any registered session times out.
+-  final SessionTimeoutCallback? onTimeout;
+-
+-  final TimerFactory _timerFactory;
+-  final Map<String, _SessionIdleEntry> _sessions = {};
+-  bool _disposed = false;
+-
+-  /// Number of sessions currently monitored for idle timeout.
+-  int get activeTrackedCount => _sessions.length;
+-
+-  /// Checks if a session is currently being tracked.
+-  bool isTracking(String sessionId) => _sessions.containsKey(sessionId);
+-
+-  /// Returns the timestamp of the last chunk activity for [sessionId], or null.
+-  DateTime? lastActivity(String sessionId) =>
+-      _sessions[sessionId]?.lastActivity;
+-
+-  /// Returns the remaining duration before [sessionId] times out, or null if not tracked.
+-  Duration? remainingTime(String sessionId) {
+-    final entry = _sessions[sessionId];
+-    if (entry == null || entry.isTimedOut) return null;
+-    final elapsed = clock.now().difference(entry.lastActivity);
+-    final remaining = entry.timeout - elapsed;
+-    return remaining.isNegative ? Duration.zero : remaining;
+-  }
+-
+-  /// Registers an active session to monitor for chunk arrivals.
+-  ///
+-  /// If the session is already tracked, its timer is reset.
+-  void registerSession(
+-    String sessionId, {
+-    Duration? timeout,
+-    SessionTimeoutCallback? onSessionTimeout,
+-  }) {
+-    if (_disposed) return;
+-
+-    final existing = _sessions[sessionId];
+-    if (existing != null) {
+-      existing.timer?.cancel();
+-    }
+-
+-    final effectiveTimeout = timeout ?? defaultTimeout;
+-    final now = clock.now();
+-    final entry = _SessionIdleEntry(
+-      sessionId: sessionId,
+-      lastActivity: now,
+-      timeout: effectiveTimeout,
+-      onTimeout: onSessionTimeout,
+-    );
+-
+-    entry.timer = _timerFactory(effectiveTimeout, () {
+-      _handleTimerFired(sessionId);
+-    });
+-
+-    _sessions[sessionId] = entry;
+-    _log.finer(
+-      'Registered idle timeout for session $sessionId '
+-      '(${effectiveTimeout.inSeconds}s)',
+-    );
+-  }
+-
+-  /// Records that a chunk arrived for [sessionId], resetting the idle timeout countdown.
+-  ///
+-  /// Returns `true` if the session was actively tracked and reset, `false` otherwise.
+-  bool onChunkReceived(String sessionId) {
+-    if (_disposed) return false;
+-
+-    final entry = _sessions[sessionId];
+-    if (entry == null || entry.isTimedOut) {
+-      _log.fine('Ignored chunk activity for untracked session $sessionId');
+-      return false;
+-    }
+-
+-    entry.lastActivity = clock.now();
+-    entry.timer?.cancel();
+-    entry.timer = _timerFactory(entry.timeout, () {
+-      _handleTimerFired(sessionId);
+-    });
+-
+-    _log.finest('Reset idle timer for session $sessionId');
+-    return true;
+-  }
+-
+-  /// Cancels idle timeout monitoring for [sessionId] (e.g. on complete, cancel, or reject).
+-  void cancelSession(String sessionId) {
+-    final entry = _sessions.remove(sessionId);
+-    if (entry != null) {
+-      entry.timer?.cancel();
+-      entry.timer = null;
+-      _log.finer('Cancelled idle timeout for session $sessionId');
+-    }
+-  }
+-
+-  /// Deterministically checks all tracked sessions against [now] (or [clock.now()]).
+-  ///
+-  /// Any session whose inactivity meets or exceeds its timeout is triggered and evicted.
+-  /// Returns the list of session IDs that timed out during this sweep.
+-  List<String> checkTimeouts([DateTime? now]) {
+-    if (_disposed) return const [];
+-    final current = now ?? clock.now();
+-    final timedOut = <String>[];
+-
+-    final entries = _sessions.values.toList();
+-    for (final entry in entries) {
+-      if (entry.isTimedOut) continue;
+-      final elapsed = current.difference(entry.lastActivity);
+-      if (elapsed >= entry.timeout) {
+-        timedOut.add(entry.sessionId);
+-        _triggerTimeout(entry);
+-      }
+-    }
+-
+-    return timedOut;
+-  }
+-
+-  void _handleTimerFired(String sessionId) {
+-    final entry = _sessions[sessionId];
+-    if (entry == null || entry.isTimedOut) return;
+-
+-    final elapsed = clock.now().difference(entry.lastActivity);
+-    if (elapsed >= entry.timeout) {
+-      _triggerTimeout(entry);
+-    } else {
+-      // Re-schedule for remaining time in case of clock skew
+-      final remaining = entry.timeout - elapsed;
+-      entry.timer = _timerFactory(remaining, () {
+-        _handleTimerFired(sessionId);
+-      });
+-    }
+-  }
+-
+-  void _triggerTimeout(_SessionIdleEntry entry) {
+-    entry.isTimedOut = true;
+-    entry.timer?.cancel();
+-    entry.timer = null;
+-    _sessions.remove(entry.sessionId);
+-
+-    _log.warning('Session ${entry.sessionId} chunk idle timeout triggered');
+-
+-    try {
+-      entry.onTimeout?.call(entry.sessionId);
+-    } catch (e, st) {
+-      _log.severe(
+-        'Session timeout callback threw for ${entry.sessionId}',
+-        e,
+-        st,
+-      );
+-    }
+-
+-    try {
+-      onTimeout?.call(entry.sessionId);
+-    } catch (e, st) {
+-      _log.severe(
+-        'Global timeout callback threw for ${entry.sessionId}',
+-        e,
+-        st,
+-      );
+-    }
+-  }
+-
+-  /// Executes canonical session termination on idle timeout:
+-  /// 1. Updates status to `FAILED(TIMEOUT)`.
+-  /// 2. Releases reserved filenames and network ports.
+-  /// 3. Preserves and flushes `.lspart` data and bitmap sidecars.
+-  /// 4. Emits a [SessionFinished] event with `reason: 'TIMEOUT'`.
+-  static Future<void> executeTimeoutTermination({
+-    required String sessionId,
+-    required void Function(TransferStatus status, FailureReason? reason)
+-    onSetStatus,
+-    required void Function() onReleaseResources,
+-    required Future<void> Function() onFlushPartialFiles,
+-    required void Function(SessionFinished event) onEmitEvent,
+-  }) async {
+-    // 1. Transition state to FAILED(TIMEOUT)
+-    onSetStatus(TransferStatus.failed, FailureReason.timeout);
+-
+-    // 2. Release reserved paths and ports
+-    onReleaseResources();
+-
+-    // 3. Preserve partial state on disk (flush sidecars)
+-    await onFlushPartialFiles();
+-
+-    // 4. Emit SessionFinished event
+-    onEmitEvent(
+-      SessionFinished(
+-        sessionId,
+-        success: false,
+-        reason: FailureReason.timeout.wire,
+-      ),
+-    );
+-  }
+-
+-  /// Cancels all active timers and clears tracked sessions.
+-  void dispose() {
+-    _disposed = true;
+-    for (final entry in _sessions.values) {
+-      entry.timer?.cancel();
+-      entry.timer = null;
+-    }
+-    _sessions.clear();
+-  }
+-}
+--- a/packages/libreshare_core/lib/src/transfer/receiver_adoption_helper.dart	2026-11-06 16:53:32.331309008 +0530
++++ b/packages/libreshare_core/lib/src/transfer/receiver_adoption_helper.dart	1970-01-01 05:30:00.000000000 +0530
+@@ -1,449 +0,0 @@
+-// ignore_for_file: depend_on_referenced_packages
+-/// Receiver restart sidecar adoption helper with cryptographic ownership validation (Increment 4, P4-5).
+-///
+-/// Implements the FR-15 restart-resume requirements and Increment 4 Decisions D2 & D3:
+-/// 1. Receiver restart: When a receiver restarts, in-memory session tables are empty.
+-/// 2. Sidecar check: Existing `<name>.lspart` and `.lspart.json` sidecars are checked.
+-/// 3. Peer authentication validation (D2/D3): Validates cryptographic peer identity against
+-///    prior [SessionRecord]s before adopting chunks. Partial files are NEVER adopted by or
+-///    revealed to an unauthenticated or mismatched peer.
+-/// 4. 24h TTL eviction: Sidecars older than 24 hours are expired and deleted.
+-/// 5. Manifest integrity: If file size, chunk size, chunk count, sha256, or modified timestamp
+-///    differ from the manifest, stale partials are discarded and download restarts from byte 0.
+-library;
+-
+-import 'dart:convert';
+-import 'dart:io';
+-
+-import 'package:crypto/crypto.dart';
+-import 'package:libreshare_core/libreshare_core.dart';
+-import 'package:logging/logging.dart';
+-import 'package:path/path.dart' as p;
+-
+-final Logger _log = Logger('ReceiverAdoptionHelper');
+-
+-/// Outcome of attempting to adopt an existing partial file and sidecar.
+-enum AdoptionStatus {
+-  /// Sidecar successfully verified and adopted with existing chunks.
+-  adopted,
+-
+-  /// No prior sidecar exists; file transfer starts fresh from byte 0.
+-  fresh,
+-
+-  /// Sidecar existed but is older than 24 hours; partial file and sidecar deleted.
+-  expired,
+-
+-  /// Request is unauthenticated; partial file adoption refused for security.
+-  rejectedUnauthenticated,
+-
+-  /// Partial file belongs to another authenticated peer; adoption strictly forbidden.
+-  rejectedPeerMismatch,
+-
+-  /// Manifest parameters (size, chunkSize, sha256, etc.) do not match sidecar; discarded.
+-  rejectedManifestMismatch,
+-
+-  /// Sidecar exists without a matching authenticated session record; discarded.
+-  orphanDiscarded,
+-}
+-
+-/// Detailed result of evaluating sidecar adoption for an individual file.
+-class FileAdoptionResult {
+-  const FileAdoptionResult({
+-    required this.fileItem,
+-    required this.status,
+-    this.store,
+-    this.adoptedRanges = const [],
+-    this.adoptedChunkCount = 0,
+-    this.adoptedBytes = 0,
+-    this.reason,
+-    this.expectedFingerprint,
+-    this.presentedFingerprint,
+-  });
+-
+-  final FileItem fileItem;
+-  final AdoptionStatus status;
+-  final ResumeStore? store;
+-  final ChunkRanges adoptedRanges;
+-  final int adoptedChunkCount;
+-  final int adoptedBytes;
+-  final String? reason;
+-  final String? expectedFingerprint;
+-  final String? presentedFingerprint;
+-
+-  bool get isAdopted => status == AdoptionStatus.adopted;
+-}
+-
+-/// Comprehensive outcome of evaluating sidecar adoption across an entire session manifest.
+-class SessionAdoptionResult {
+-  const SessionAdoptionResult({
+-    required this.sessionId,
+-    required this.fileResults,
+-    required this.totalAdoptedBytes,
+-    required this.totalAdoptedChunks,
+-  });
+-
+-  final String sessionId;
+-  final Map<String, FileAdoptionResult> fileResults;
+-  final int totalAdoptedBytes;
+-  final int totalAdoptedChunks;
+-
+-  bool get hasAdoptedChunks => totalAdoptedChunks > 0;
+-
+-  /// Returns wire-format acceptedFiles mapping for LSP-1 session acceptance:
+-  /// `{fileId: {'receivedRanges': [[0, 4]]}}`.
+-  Map<String, Map<String, Object?>> get acceptedFilesMap {
+-    final map = <String, Map<String, Object?>>{};
+-    for (final entry in fileResults.entries) {
+-      map[entry.key] = {'receivedRanges': entry.value.adoptedRanges};
+-    }
+-    return map;
+-  }
+-}
+-
+-/// Helper that inspects on-disk sidecars, validates cryptographic ownership,
+-/// enforces 24h TTL, and adopts chunks across receiver restarts.
+-class ReceiverAdoptionHelper {
+-  ReceiverAdoptionHelper({
+-    required this.downloadDir,
+-    this.partialDir,
+-    required this.sessionStore,
+-    this.clock = const SystemClock(),
+-    this.maxAge = kResumeWindow,
+-    this.isSecure = true,
+-  });
+-
+-  final Directory downloadDir;
+-  final Directory? partialDir;
+-  final SessionStore sessionStore;
+-  final Clock clock;
+-  final Duration maxAge;
+-  final bool isSecure;
+-
+-  /// Resolves the in-progress `.lspart` file corresponding to [target].
+-  File partialFileFor(File target) {
+-    final dir = partialDir;
+-    if (dir == null) return File('${target.path}$kPartialSuffix');
+-    final rel = p.relative(
+-      target.path,
+-      from: p.normalize(downloadDir.absolute.path),
+-    );
+-    final h = sha256.convert(utf8.encode(rel)).toString().substring(0, 24);
+-    return File(p.join(dir.path, '$h$kPartialSuffix'));
+-  }
+-
+-  /// Evaluates and performs sidecar adoption for all files in a [SessionRequest].
+-  Future<SessionAdoptionResult> adoptSession({
+-    required String sessionId,
+-    required SessionRequest request,
+-    required AuthenticatedPeer? peer,
+-  }) async {
+-    final fileResults = <String, FileAdoptionResult>{};
+-    var totalBytes = 0;
+-    var totalChunks = 0;
+-
+-    // Load persisted prior sessions for peer verification
+-    final priorSessions = await sessionStore.listSessions(
+-      role: SessionRole.receiver,
+-    );
+-
+-    for (final item in request.files) {
+-      final res = await adoptFile(
+-        item: item,
+-        chunkSize: request.chunkSize,
+-        peer: peer,
+-        priorSessions: priorSessions,
+-      );
+-      fileResults[item.fileId] = res;
+-      if (res.isAdopted) {
+-        totalBytes += res.adoptedBytes;
+-        totalChunks += res.adoptedChunkCount;
+-      }
+-    }
+-
+-    // Persist new session record reflecting adopted files into SessionStore
+-    final sessionFiles = <SessionFileRecord>[];
+-    for (final item in request.files) {
+-      final res = fileResults[item.fileId]!;
+-      sessionFiles.add(
+-        SessionFileRecord(
+-          fileId: item.fileId,
+-          name: item.fileName,
+-          size: item.size,
+-          chunkSize: request.chunkSize,
+-          chunkCount: item.chunkCount,
+-          sha256: item.sha256,
+-          partialPath: res.store?.partialFile.path,
+-          receivedRanges: res.adoptedRanges,
+-          isComplete: res.store?.isComplete ?? false,
+-        ),
+-      );
+-    }
+-
+-    final record = SessionRecord(
+-      sessionId: sessionId,
+-      role: SessionRole.receiver,
+-      peerDeviceId: peer?.deviceId ?? request.sender.deviceId,
+-      peerFingerprint: peer?.fingerprint ?? '',
+-      status: TransferStatus.inProgress,
+-      files: sessionFiles,
+-      totalSize: request.totalSize,
+-      createdAt: clock.now(),
+-      updatedAt: clock.now(),
+-    );
+-
+-    await sessionStore.saveSession(record);
+-
+-    return SessionAdoptionResult(
+-      sessionId: sessionId,
+-      fileResults: fileResults,
+-      totalAdoptedBytes: totalBytes,
+-      totalAdoptedChunks: totalChunks,
+-    );
+-  }
+-
+-  /// Evaluates sidecar adoption for an individual [FileItem].
+-  Future<FileAdoptionResult> adoptFile({
+-    required FileItem item,
+-    required int chunkSize,
+-    required AuthenticatedPeer? peer,
+-    List<SessionRecord>? priorSessions,
+-  }) async {
+-    final target = resolveTarget(
+-      downloadDir: downloadDir,
+-      fileName: item.fileName,
+-      relativePath: item.relativePath,
+-      isReserved: (_) => false,
+-    );
+-    final partial = partialFileFor(target);
+-    final sidecar = ResumeStore.sidecarFor(partial);
+-
+-    if (!sidecar.existsSync()) {
+-      // No sidecar exists. If an unmanaged partial file exists, it is not ours.
+-      return FileAdoptionResult(fileItem: item, status: AdoptionStatus.fresh);
+-    }
+-
+-    // Step 1: Check 24-hour sidecar TTL expiration
+-    final sidecarMeta = _readSidecarMetadata(sidecar);
+-    if (sidecarMeta == null) {
+-      _deleteQuietly(sidecar);
+-      _deleteQuietly(partial);
+-      return FileAdoptionResult(
+-        fileItem: item,
+-        status: AdoptionStatus.fresh,
+-        reason: 'Unreadable or corrupt sidecar deleted',
+-      );
+-    }
+-
+-    final sidecarAge = clock.now().difference(sidecarMeta.updatedAt);
+-    if (sidecarAge > maxAge) {
+-      _log.info(
+-        'Discarding expired sidecar for ${item.fileName} (age: ${sidecarAge.inHours}h)',
+-      );
+-      _deleteQuietly(sidecar);
+-      _deleteQuietly(partial);
+-      return FileAdoptionResult(
+-        fileItem: item,
+-        status: AdoptionStatus.expired,
+-        reason: 'Sidecar exceeded 24h TTL (${sidecarAge.inHours}h old)',
+-      );
+-    }
+-
+-    // Step 2: Peer Authentication & Cryptographic Ownership Validation (D2/D3)
+-    if (isSecure) {
+-      if (peer == null || peer.fingerprint.trim().isEmpty) {
+-        _log.warning(
+-          'Refusing sidecar adoption for ${item.fileName}: peer is unauthenticated',
+-        );
+-        return FileAdoptionResult(
+-          fileItem: item,
+-          status: AdoptionStatus.rejectedUnauthenticated,
+-          reason: 'Cannot adopt partial download for unauthenticated peer',
+-        );
+-      }
+-
+-      final sessions =
+-          priorSessions ??
+-          await sessionStore.listSessions(role: SessionRole.receiver);
+-
+-      // Search prior sessions for ownership of this partial file
+-      final matchingRecord = _findSessionOwningFile(
+-        sessions,
+-        partial.path,
+-        item.fileName,
+-      );
+-
+-      if (matchingRecord == null) {
+-        // Orphan sidecar without session record under secure profile: discard
+-        _log.warning(
+-          'Orphan sidecar found without SessionStore record for ${item.fileName}; discarding',
+-        );
+-        _deleteQuietly(sidecar);
+-        _deleteQuietly(partial);
+-        return FileAdoptionResult(
+-          fileItem: item,
+-          status: AdoptionStatus.orphanDiscarded,
+-          reason:
+-              'Sidecar has no cryptographic ownership record in SessionStore',
+-        );
+-      }
+-
+-      final recordFp = matchingRecord.peerFingerprint.toUpperCase();
+-      final peerFp = peer.fingerprint.toUpperCase();
+-
+-      if (recordFp != peerFp) {
+-        _log.severe(
+-          'Ownership mismatch on partial file ${item.fileName}: '
+-          'expected $recordFp, presented $peerFp',
+-        );
+-        return FileAdoptionResult(
+-          fileItem: item,
+-          status: AdoptionStatus.rejectedPeerMismatch,
+-          expectedFingerprint: recordFp,
+-          presentedFingerprint: peerFp,
+-          reason: 'Partial file belongs to a different authenticated peer',
+-        );
+-      }
+-    }
+-
+-    // Step 3: Manifest Integrity Check
+-    if (item.size != sidecarMeta.size ||
+-        chunkSize != sidecarMeta.chunkSize ||
+-        item.chunkCount != sidecarMeta.chunkCount ||
+-        (item.sha256 != null &&
+-            sidecarMeta.sha256 != null &&
+-            item.sha256!.toLowerCase() != sidecarMeta.sha256!.toLowerCase()) ||
+-        (item.modified != null &&
+-            sidecarMeta.modified != null &&
+-            item.modified!.toUtc().toIso8601String() !=
+-                sidecarMeta.modified!.toUtc().toIso8601String())) {
+-      _log.warning(
+-        'Manifest mismatch for ${item.fileName}; resetting transfer',
+-      );
+-      _deleteQuietly(sidecar);
+-      _deleteQuietly(partial);
+-      return FileAdoptionResult(
+-        fileItem: item,
+-        status: AdoptionStatus.rejectedManifestMismatch,
+-        reason: 'Manifest parameters differ from persisted sidecar metadata',
+-      );
+-    }
+-
+-    // Step 4: Open ResumeStore safely
+-    final store = await ResumeStore.open(
+-      partialFile: partial,
+-      size: item.size,
+-      chunkSize: chunkSize,
+-      chunkCount: item.chunkCount,
+-      sha256: item.sha256,
+-      modified: item.modified,
+-      clock: clock,
+-      maxAge: maxAge,
+-    );
+-
+-    if (!store.resumed) {
+-      return FileAdoptionResult(
+-        fileItem: item,
+-        status: AdoptionStatus.fresh,
+-        store: store,
+-        reason: 'ResumeStore rejected inconsistent partial data',
+-      );
+-    }
+-
+-    // Step 5: Successful Adoption
+-    final chunker = Chunker(chunkSize);
+-    var bytes = 0;
+-    for (final range in store.ranges) {
+-      for (var i = range[0]; i <= range[1]; i++) {
+-        final r = chunker.range(item.size, i);
+-        bytes += (r.end - r.start);
+-      }
+-    }
+-
+-    _log.info(
+-      'Adopted ${store.receivedCount}/${item.chunkCount} chunks '
+-      '($bytes bytes) for ${item.fileName}',
+-    );
+-
+-    return FileAdoptionResult(
+-      fileItem: item,
+-      status: AdoptionStatus.adopted,
+-      store: store,
+-      adoptedRanges: store.ranges,
+-      adoptedChunkCount: store.receivedCount,
+-      adoptedBytes: bytes,
+-    );
+-  }
+-
+-  SessionRecord? _findSessionOwningFile(
+-    List<SessionRecord> sessions,
+-    String partialPath,
+-    String fileName,
+-  ) {
+-    final normalizedPartial = p.normalize(partialPath).toLowerCase();
+-    for (final session in sessions) {
+-      for (final file in session.files) {
+-        if (file.partialPath != null &&
+-            p.normalize(file.partialPath!).toLowerCase() == normalizedPartial) {
+-          return session;
+-        }
+-        if (file.name == fileName) {
+-          return session;
+-        }
+-      }
+-    }
+-    return null;
+-  }
+-
+-  _SidecarMeta? _readSidecarMetadata(File sidecar) {
+-    try {
+-      final json =
+-          jsonDecode(sidecar.readAsStringSync()) as Map<String, Object?>;
+-      final size = json['size'] as int?;
+-      final chunkSize = json['chunkSize'] as int?;
+-      final chunkCount = json['chunkCount'] as int?;
+-      final updatedAt = DateTime.parse(json['updatedAt'] as String);
+-      final sha256 = json['sha256'] as String?;
+-      final modifiedStr = json['modified'] as String?;
+-      final modified = modifiedStr != null ? DateTime.parse(modifiedStr) : null;
+-
+-      if (size == null || chunkSize == null || chunkCount == null) return null;
+-
+-      return _SidecarMeta(
+-        size: size,
+-        chunkSize: chunkSize,
+-        chunkCount: chunkCount,
+-        updatedAt: updatedAt,
+-        sha256: sha256,
+-        modified: modified,
+-      );
+-    } catch (_) {
+-      return null;
+-    }
+-  }
+-
+-  static void _deleteQuietly(File file) {
+-    try {
+-      if (file.existsSync()) file.deleteSync();
+-    } on FileSystemException {
+-      // Best effort deletion
+-    }
+-  }
+-}
+-
+-class _SidecarMeta {
+-  const _SidecarMeta({
+-    required this.size,
+-    required this.chunkSize,
+-    required this.chunkCount,
+-    required this.updatedAt,
+-    this.sha256,
+-    this.modified,
+-  });
+-
+-  final int size;
+-  final int chunkSize;
+-  final int chunkCount;
+-  final DateTime updatedAt;
+-  final String? sha256;
+-  final DateTime? modified;
+-}
+--- a/packages/libreshare_core/lib/src/transfer/resume_store.dart	2026-11-06 16:53:32.331309008 +0530
 +++ b/packages/libreshare_core/lib/src/transfer/resume_store.dart	2026-11-06 12:06:47.261875310 +0530
 @@ -15,6 +15,7 @@
  

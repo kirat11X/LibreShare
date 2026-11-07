@@ -1,0 +1,53 @@
+[2026-11-06 14:04:35] START c-verifier-baseline
+[2026-11-06 14:08:56] END c-verifier-baseline rc=0 :: 00:14 +2 -1: VERIFIER retry-bounded: with a contact that never accepts, the retry chain ends by itself within ~45 s and does not re-arm [E]| Consider enabling the flag chain-stack-traces to receive more detailed exceptions.
+[2026-11-06 14:08:56] START b-a
+[2026-11-06 14:13:45] END b-a rc=1 restore-diff-rc=0 :: RED: test/security/bye_flood_test.dart: GUARD per-source-failed-verify-limit: 1000 forged byes/s for 3 s from one source do n|test/security/bye_flood_test.dart: GUARD per-source-failed-verify-limit-same-second: the genuine bye arrives in the very|test/security/bye_flood_verifier_test.dart: RESIDUAL-LIMIT measurement: how many distinct forging sources starve a genui|test/security/bye_flood_verifier_test.dart: SHARE-EXACTLY-2: one flooding source burns exactly 2 of the 5 verifications,|test/security/bye_flood_verifier_test.dart: SPOOFED-SOURCE side effect: 2 forged byes per second with the legitimate pee|
+[2026-11-06 14:13:45] START b-b
+[2026-11-06 14:20:13] END b-b rc=1 restore-diff-rc=0 :: RED: test/security/bye_flood_test.dart: GUARD per-source-failed-verify-limit: 1000 forged byes/s for 3 s from one source do n|test/security/bye_flood_test.dart: GUARD per-source-failed-verify-limit-same-second: the genuine bye arrives in the very|test/security/bye_flood_verifier_test.dart: RESIDUAL-LIMIT measurement: how many distinct forging sources starve a genui|test/security/bye_flood_verifier_test.dart: SHARE-EXACTLY-2: one flooding source burns exactly 2 of the 5 verifications,|test/security/bye_flood_verifier_test.dart: SPOOFED-SOURCE side effect: 2 forged byes per second with the legitimate pee|
+[2026-11-06 14:20:13] START b-c
+[2026-11-06 14:25:13] END b-c rc=1 restore-diff-rc=0 :: RED: test/security/bye_flood_test.dart: GUARD per-source-failed-verify-limit: 1000 forged byes/s for 3 s from one source do n|test/security/bye_flood_test.dart: GUARD per-source-failed-verify-limit-same-second: the genuine bye arrives in the very|test/security/bye_flood_verifier_test.dart: RESIDUAL-LIMIT measurement: how many distinct forging sources starve a genui|test/security/bye_flood_verifier_test.dart: SHARE-EXACTLY-2: one flooding source burns exactly 2 of the 5 verifications,|test/security/bye_flood_verifier_test.dart: SPOOFED-SOURCE side effect: 2 forged byes per second with the legitimate pee|
+[2026-11-06 14:25:13] START b-d
+[2026-11-06 14:27:15] END b-d rc=1 restore-diff-rc=0 :: RED: test/security/bye_flood_test.dart: GUARD flood-source-not-banned-forever: after the flood stops and 10 s pass the same s|test/security/bye_flood_verifier_test.dart: SPOOFED-SOURCE side effect: 2 forged byes per second with the legitimate pee|
+[2026-11-06 14:27:15] START b-e
+[2026-11-06 15:03:43] END b-e rc=1 restore-diff-rc=0 :: RED: test/security/bye_flood_test.dart: GUARD per-source-failed-verify-limit: 1000 forged byes/s for 3 s from one source do n|test/security/bye_flood_test.dart: GUARD per-source-failed-verify-limit-same-second: the genuine bye arrives in the very|test/security/bye_flood_verifier_test.dart: RESIDUAL-LIMIT measurement: how many distinct forging sources starve a genui|test/security/bye_flood_verifier_test.dart: SHARE-EXACTLY-2: one flooding source burns exactly 2 of the 5 verifications,|
+[2026-11-06 15:03:43] START b-f
+[2026-11-06 15:10:54] b-f aborted (queued, killed by verifier to re-batch); restored rc=0
+[2026-11-06 15:30:55] START b-f
+[2026-11-06 15:31:03] END b-f rc=1 restore-diff-rc=0 :: RED: test/security/bye_flood_test.dart: GUARD per-source-failed-verify-limit: 1000 forged byes/s for 3 s from one source do n|test/security/bye_flood_test.dart: GUARD per-source-failed-verify-limit-same-second: the genuine bye arrives in the very|test/security/bye_flood_verifier_test.dart: RESIDUAL-LIMIT measurement: how many distinct forging sources starve a genui|test/security/bye_flood_verifier_test.dart: SHARE-EXACTLY-2: one flooding source burns exactly 2 of the 5 verifications,|
+[2026-11-06 15:31:03] START b-g
+[2026-11-06 15:31:11] END b-g rc=1 restore-diff-rc=0 :: RED: test/security/bye_flood_verifier_test.dart: FAILURE-TABLE-BOUNDED (white box): 5 verified failures per second from ever-|
+[2026-11-06 15:31:11] START c-verifier-baseline2
+[2026-11-06 15:32:20] END c-verifier-baseline2 rc=0 ::  01:08 +4: All tests passed!
+[2026-11-06 15:32:20] START c-a
+[2026-11-06 15:33:30] END c-a rc=1 restore-diff-rc=0 :: RED: test/integration/contacts_greeting_retry_test.dart: restart GUARD regreet-after-restart: Sam restarts while still listed|test/integration/contacts_greeting_retry_test.dart: retry GUARD greeting-retry-keeps-going: Sam becomes ready only 3.5 s|test/integration/contacts_greeting_retry_test.dart: retry GUARD greeting-retry: the first greeting is refused (404, Sam |test/integration/contacts_greeting_retry_verifier_test.dart: VERIFIER retry-bounded: with a contact that never accepts, |test/integration/contacts_greeting_retry_verifier_test.dart: VERIFIER state-cleaned-on-removal-and-relisting: removal dr|test/integration/contacts_greeting_retry_verifier_test.dart: VERIFIER timers-cancelled-on-stop: every pending retry Time|
+[2026-11-06 15:33:30] START c-b1
+[2026-11-06 15:35:13] END c-b1 rc=1 restore-diff-rc=0 :: RED: test/integration/contacts_greeting_retry_test.dart: restart GUARD regreet-after-restart: Sam restarts while still listed|test/integration/contacts_greeting_retry_verifier_test.dart: VERIFIER state-cleaned-on-removal-and-relisting: removal dr|
+[2026-11-06 15:35:13] START c-b2
+[2026-11-06 15:36:56] END c-b2 rc=1 restore-diff-rc=0 :: RED: test/integration/contacts_greeting_retry_test.dart: restart GUARD regreet-after-restart: Sam restarts while still listed|test/integration/contacts_greeting_retry_test.dart: retry GUARD retry-stops-when-contact-removed: no greeting after the |test/integration/contacts_greeting_retry_verifier_test.dart: VERIFIER state-cleaned-on-removal-and-relisting: removal dr|
+[2026-11-06 15:36:56] START c-c
+[2026-11-06 15:38:39] END c-c rc=1 restore-diff-rc=0 :: RED: test/integration/contacts_greeting_retry_test.dart: restart GUARD regreet-after-restart: Sam restarts while still listed|test/integration/contacts_greeting_retry_test.dart: retry GUARD retry-stops-when-contact-removed: no greeting after the |test/integration/contacts_greeting_retry_verifier_test.dart: VERIFIER state-cleaned-on-removal-and-relisting: removal dr|
+[2026-11-06 15:38:39] START c-d
+[2026-11-06 15:40:22] END c-d rc=1 restore-diff-rc=0 :: RED: test/integration/contacts_greeting_retry_test.dart: restart GUARD regreet-after-restart: Sam restarts while still listed|test/integration/contacts_greeting_retry_verifier_test.dart: VERIFIER timers-cancelled-on-stop: every pending retry Time|
+[2026-11-06 15:40:22] START c-e
+[2026-11-06 15:42:05] END c-e rc=1 restore-diff-rc=0 :: RED: test/integration/contacts_greeting_retry_test.dart: restart GUARD regreet-after-restart: Sam restarts while still listed|test/integration/contacts_greeting_retry_verifier_test.dart: VERIFIER retry-bounded: with a contact that never accepts, |
+[2026-11-06 15:42:05] START c-f
+[2026-11-06 15:43:10] END c-f rc=1 restore-diff-rc=0 :: RED: test/integration/contacts_greeting_retry_test.dart: restart GUARD regreet-after-restart: Sam restarts while still listed|test/integration/contacts_greeting_retry_test.dart: retry GUARD greeting-retry-keeps-going: Sam becomes ready only 3.5 s|test/integration/contacts_greeting_retry_test.dart: retry GUARD greeting-retry: the first greeting is refused (404, Sam |test/integration/contacts_greeting_retry_verifier_test.dart: VERIFIER retry-bounded: with a contact that never accepts, |test/integration/contacts_greeting_retry_verifier_test.dart: VERIFIER state-cleaned-on-removal-and-relisting: removal dr|
+[2026-11-06 15:43:10] START c-g
+[2026-11-06 15:44:54] END c-g rc=1 restore-diff-rc=0 :: RED: test/integration/contacts_greeting_retry_test.dart: restart GUARD regreet-after-restart: Sam restarts while still listed|test/integration/contacts_greeting_retry_verifier_test.dart: VERIFIER retry-stops-when-contacts-only-switched-off: Bob g|
+[2026-11-06 15:44:54] ALLDONE
+[2026-11-06 20:49:29] START c-verifier-final-1
+[2026-11-06 20:50:42] END c-verifier-final-1 rc=0 :: 01:12 +5: All tests passed!
+[2026-11-06 20:50:42] START c-verifier-final-2
+[2026-11-06 20:51:55] END c-verifier-final-2 rc=0 :: 01:12 +5: All tests passed!
+[2026-11-06 20:51:55] START c-verifier-final-3
+[2026-11-06 20:53:09] END c-verifier-final-3 rc=0 :: 01:12 +5: All tests passed!
+[2026-11-06 20:53:09] START c-probe
+[2026-11-06 20:53:17] END c-probe rc=0 :: 00:07 +0 -1: PROBE overlapping greeting chains are not merged [E] 00:07 +0 -1: Some tests failed. 
+[2026-11-06 20:53:17] START c-c2
+[2026-11-06 20:54:31] END c-c2 rc=1 restore-diff-rc=0 :: RED: VERIFIER greet-only-contacts-after-trust-change: a trust change while an open stranger is listed must not greet the stra|VERIFIER state-cleaned-on-removal-and-relisting: removal drops the retry timer and the greeted mark; re-adding starts a |
+[2026-11-06 20:54:31] BATCH3DONE
+[2026-11-06 20:55:28] START r4b-verifier-files
+[2026-11-06 20:55:35] END r4b-verifier-files rc=0 :: 00:01 +4: test/security/bye_flood_table_verifier_test.dart: FAILURE-TABLE-BOUNDED (white box): 5 verified failures per second from ever-new sources for 80 s keep the table <= 256 entries R4b failure table: sources seen=400, max table length=255 00:05 +5: All tests passed! 
+[2026-11-06 20:55:35] START r4c-verifier-formatted
+[2026-11-06 20:56:48] END r4c-verifier-formatted rc=0 :: 01:12 +5: All tests passed!
+[2026-11-06 20:56:48] BATCH4DONE

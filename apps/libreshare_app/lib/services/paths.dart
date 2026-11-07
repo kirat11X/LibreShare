@@ -18,9 +18,17 @@ String joinPath(String first, [String? second, String? third]) {
   return buf.toString();
 }
 
+final RegExp _driveRoot = RegExp(r'^(?:\\\\\?\\)?[A-Za-z]:[/\\]');
+final RegExp _uncRoot = RegExp(r'^(?:\\\\\?\\UNC\\|\\\\)[^/\\]+[/\\][^/\\]+');
+
 /// Directory part of [path] (handles both separators); '.' when there is none.
+/// Windows roots (`C:\`, `\\?\C:\`, `\\host\share`, `\\?\UNC\host\share`) are
+/// their own parent and are never truncated.
 String parentDir(String path) {
+  final root = _driveRoot.firstMatch(path) ?? _uncRoot.firstMatch(path);
+  final rootLen = root?.end ?? 0;
   final i = path.lastIndexOf(RegExp(r'[/\\]'));
+  if (rootLen > 0 && i < rootLen) return path.substring(0, rootLen);
   if (i < 0) return '.';
   if (i == 0) return path.substring(0, 1);
   return path.substring(0, i);

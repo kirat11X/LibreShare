@@ -1,0 +1,13 @@
+[2026-11-06 21:55:37] START tester
+[2026-11-06 21:55:44] END tester rc=0 :: 00:01 +6: (tearDownAll) 00:01 +6: All tests passed! 
+[2026-11-06 21:55:44] START verifier
+[2026-11-06 21:55:47] END verifier rc=0 :: 00:01 +4: (tearDownAll) 00:01 +4: All tests passed! 
+[2026-11-06 21:55:47] START table-1
+[2026-11-06 21:55:52] END table-1 rc=0 :: R4b failure table: sources seen=400, max table length=255 00:04 +1: All tests passed! 
+[2026-11-06 21:55:52] START table-2
+[2026-11-06 21:55:57] END table-2 rc=0 :: R4b failure table: sources seen=400, max table length=255 00:03 +1: All tests passed! 
+[2026-11-06 21:55:57] START table-3
+[2026-11-06 21:56:02] END table-3 rc=0 :: R4b failure table: sources seen=400, max table length=255 00:04 +1: All tests passed! 
+[2026-11-06 21:56:02] START mut-g
+[2026-11-06 21:56:12] END mut-g rc=1 restore-diff-rc=0 :: R4b failure table: sources seen=400, max table length=400 00:04 +0 -1: FAILURE-TABLE-BOUNDED (white box): 5 verified failures per second from ever-new sources for 80 s keep the table <= 256 entries [E] 
+[2026-11-06 21:56:12] BATCHDONE

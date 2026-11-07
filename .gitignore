@@ -7,3 +7,10 @@ pubspec.lock.bak
 .vscode/
 coverage/
 dist/
+
+# Scratch and diagnostic probes
+test_c_*
+test_*.dart
+test_*.c
+packages/libreshare_core/test/scratch_*.dart
+

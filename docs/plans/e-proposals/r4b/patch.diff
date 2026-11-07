@@ -1,6 +1,14 @@
---- a/packages/libreshare_core/lib/src/discovery/multicast_discovery.dart	2026-11-05 08:33:15.573183557 +0530
-+++ b/packages/libreshare_core/lib/src/discovery/multicast_discovery.dart	2026-11-06 12:13:09.270454347 +0530
-@@ -134,6 +134,13 @@
+--- a/packages/libreshare_core/lib/src/discovery/multicast_discovery.dart	2026-11-06 16:53:32.330309011 +0530
++++ b/packages/libreshare_core/lib/src/discovery/multicast_discovery.dart	2026-11-06 20:59:20.134240468 +0530
+@@ -25,6 +25,7 @@
+ import 'dart:async';
+ 
+ import 'package:logging/logging.dart';
++import 'package:meta/meta.dart' show visibleForTesting;
+ 
+ import '../clock.dart';
+ import '../model/device.dart';
+@@ -134,6 +135,17 @@
  
    // fingerprint -> highest accepted bye ts (replay memory; outlives removal).
    final Map<String, int> _lastByeTs = {};
@@ -11,10 +19,14 @@
 +  final Map<String, List<DateTime>> _byeFailures = {};
 +  static const int _maxByeFailuresPerSource = 2;
 +  static const int _maxByeFailureSources = 256;
++
++  /// Number of sources currently tracked in the failed-bye table (E5 R4b). For tests.
++  @visibleForTesting
++  int get byeFailureSourceCount => _byeFailures.length;
    final List<DateTime> _byeVerifications = [];
  
    int _announcesSent = 0;
-@@ -392,7 +399,7 @@
+@@ -392,7 +404,7 @@
      if (security.isSecure) {
        final bye = decodeBye(packet.data);
        if (bye != null) {
@@ -23,7 +35,7 @@
          return;
        }
      }
-@@ -458,7 +465,7 @@
+@@ -458,7 +470,7 @@
  
    /// LSP-1 4.2 rule 9. Cheap checks first (they do not spend the verification
    /// budget); the replay memory is written only after the signature verified.
@@ -32,7 +44,7 @@
      final now = _clock.now();
      final nowMs = now.toUtc().millisecondsSinceEpoch;
      if ((nowMs - bye.ts).abs() > byeWindow.inMilliseconds) return;
-@@ -474,6 +481,10 @@
+@@ -474,6 +486,10 @@
      final last = _lastByeTs[bye.fingerprint];
      if (last != null && bye.ts <= last) return; // replay
  
@@ -43,7 +55,7 @@
      if (!_takeByeBudget(now)) return;
      if (!verifySignature(
        certDer: cert,
-@@ -481,6 +492,7 @@
+@@ -481,6 +497,7 @@
        message: byeSignedText(bye),
        signature: bye.signature,
      )) {
@@ -51,7 +63,7 @@
        return;
      }
      _lastByeTs.remove(bye.fingerprint);
-@@ -491,6 +503,30 @@
+@@ -491,6 +508,30 @@
      registry.remove(bye.deviceId);
    }
  

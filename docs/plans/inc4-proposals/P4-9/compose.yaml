@@ -1,0 +1,122 @@
+# LibreShare Increment 3 end-to-end test (spec 12 Inc 2 FR-02, spec 13/14, inc3 section 7).
+#
+#   docker compose -f tools/docker/compose.yaml up --build --abort-on-container-exit --exit-code-from tester
+#   tools/docker/run_local.sh        # same, plus clean-up and a PASS/FAIL line
+#
+name: libreshare-e2e
+
+x-ls: &ls
+  image: libreshare-e2e/ls:local
+  # Never pull "libreshare-e2e/ls" from a registry: it is built here (a foreign image of that name
+  # on a registry must never be run by accident).
+  pull_policy: never
+  init: true
+  stop_grace_period: 5s
+
+services:
+  alice:
+    <<: *ls
+    build:
+      context: ../..
+      dockerfile: tools/docker/Dockerfile
+      args:
+        DART_VERSION: "3.13.7"
+    command: ["/usr/local/bin/alice.sh"]
+    volumes:
+      - alice_data:/data
+      - alice_id:/alice-id
+      - sync:/sync
+    networks:
+      lan_net:
+        ipv4_address: 172.28.5.240
+      wifi_net:
+        ipv4_address: 172.28.6.240
+
+  bob:
+    <<: *ls
+    command: ["/usr/local/bin/bob.sh"]
+    volumes:
+      - bob_id:/bob-id
+      - sync:/sync
+    networks:
+      lan_net:
+        ipv4_address: 172.28.5.250
+      wifi_net:
+        ipv4_address: 172.28.6.250
+
+  carol:
+    <<: *ls
+    command: ["/usr/local/bin/carol.sh"]
+    environment:
+      CAROL_WINDOW_S: "12"
+    volumes:
+      - sync:/sync
+    networks:
+      lan_net:
+        ipv4_address: 172.28.5.230
+
+  dave:
+    <<: *ls
+    command: ["/usr/local/bin/dave.sh"]
+    environment:
+      DAVE_IP: 172.28.5.220
+    volumes:
+      - dave_id:/dave-id
+      - sync:/sync
+    networks:
+      lan_net:
+        ipv4_address: 172.28.5.220
+
+  legacy:
+    <<: *ls
+    command: ["/usr/local/bin/legacy.sh"]
+    volumes:
+      - sync:/sync
+    networks:
+      lan_net:
+        ipv4_address: 172.28.5.210
+
+  tester:
+    <<: *ls
+    user: "0:0"
+    cap_add: [NET_ADMIN]
+    depends_on: [alice, bob, carol, dave, legacy]
+    command: ["/usr/local/bin/e2e.sh"]
+    environment:
+      ALICE_IP: 172.28.5.240
+      BOB_IP: 172.28.5.250
+      CAROL_IP: 172.28.5.230
+      DAVE_IP: 172.28.5.220
+      LEGACY_IP: 172.28.5.210
+      BENCH_MIB: "${BENCH_MIB:-1024}"
+    volumes:
+      - alice_data:/alice-data:ro
+      - sync:/sync
+    tmpfs:
+      - /bench:size=2600m,mode=1777
+    networks:
+      lan_net:
+        ipv4_address: 172.28.5.10
+      wifi_net:
+        ipv4_address: 172.28.6.10
+
+networks:
+  lan_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.5.0/24
+          gateway: 172.28.5.1
+  wifi_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.6.0/24
+          gateway: 172.28.6.1
+
+volumes:
+  alice_data:
+  sync:
+  alice_id:
+  bob_id:
+  dave_id:

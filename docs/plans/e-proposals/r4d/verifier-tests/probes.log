@@ -1,0 +1,25 @@
+00:00 +0: loading test/unit/peer_registry_cert_cache_verifier_probes_test.dart
+00:00 +0: (setUpAll)
+VERIFIER pool generation 197392 ms
+03:17 +0: P1 unknown-bucket flood of 5000 certs: legit certs from 10 listed addresses all survive
+VERIFIER P1 learned=5000 legit alive=10/10 certs=74
+04:05 +1: P1b legit certs learned BEFORE their peer is listed sit in the unknown bucket (honest residual)
+VERIFIER P1b unknown-bucket legit alive=0/10 (bucket cap 64)
+05:01 +2: P2 flood from 5000 distinct (spoofed) addresses: how many legit certs survive
+VERIFIER P2 legit alive after N distinct-address certs: {16: 10, 500: 10, 1000: 10, 1014: 10, 1015: 9, 5000: 0}
+05:59 +3: P2b 17 hostile addresses x 64 certs fill the global memory (source cap is not a global guarantee)
+VERIFIER P2b legit alive=0/10 after 17 sources x 64 certs (1088)
+06:11 +4: P3 memory: after 20000 learns (mixed single and distinct addresses) bookkeeping <= 1024 and consistent
+VERIFIER P3 certs=1024 certSource=1024 certSourceCount=961 sumCounts=1024 max=64
+10:06 +5: P3b unknown-bucket flood: after 20000 learns the unknown bucket holds <= 64 and maps are consistent
+VERIFIER P3b certs=64 src=64 buckets=1 unknown=64
+13:35 +6: P3c peer removal and expiry: bookkeeping stays bounded and certs outlive presence
+VERIFIER P3c after removal: certs=192 src=192 buckets=3
+13:38 +7: P4 key rotation: the peer re-announces with a new certificate; new one stored and attributed, old one accounting
+VERIFIER P4 new stored=true old still stored=true count[10.1.0.1]=2 fpChanged=true
+13:38 +8: P6 fingerprint-borrowing: an attacker listed first with the victim fingerprint steals the victim cert attribution and evicts it with 65 learns
+VERIFIER P6 victim cert attributed to "10.66.6.6"; victim cert alive after 65 attacker certs: false
+13:39 +9: P5 cost: 20000 learns with 1024 listed peers vs 0 listed peers (scan cost)
+VERIFIER P5 20000 learns: 182650 ms with 0 peers, 185932 ms with 1024 listed peers (delta per learn 164.1 us)
+19:47 +10: (tearDownAll)
+19:47 +10: All tests passed!

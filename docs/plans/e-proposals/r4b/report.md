@@ -23,3 +23,9 @@ Red before (tester): bye_flood_test +4 -2 (rc=1, 10:34:50). Green after: 6/6.
 - A forger sharing an IP with a legit peer (NAT) can delay that peer's bye by up to 1 s windows (bye is best effort, 90 s expiry backs it).
 - A legit peer whose bye fails twice (e.g. stale cert) is muted for 1 s: harmless.
 - Needs tester action: remove the unused import in bye_flood_test.dart for analyze to pass.
+
+## Round 2 (2026-11-06, orchestrator request)
+Added to `MulticastDiscovery` (plus `import 'package:meta/meta.dart' show visibleForTesting;`, meta is already a core dependency):
+`@visibleForTesting int get byeFailureSourceCount => _byeFailures.length;` (read-only, lets a verifier test the 256-source cap without dart:mirrors). Nothing else changed; no per-fingerprint cap.
+Gates (clone): bye_flood_test 3x rc=0 (+6 each, 20:59-21:31); test/unit/goodbye_test.dart rc=0 (+26, 21:53); `dart analyze --fatal-infos lib` rc=0 "No issues found" (21:53; the tester file's unused import was not part of this check); `dart format --output=none --set-exit-if-changed` on multicast_discovery.dart rc=0. patch.diff regenerated against the real tree; `patch -p1 --dry-run` on a copy of the real lib file rc=0.
+Residual limit (documented, not fixed): 3 or more distinct forging source addresses can still exhaust the shared 5/s verify budget, because each source may fail 2 verifications per second and an attacker can name any listed fingerprint, so a per-fingerprint cap would not close it; byes then fall back to the 90 s expiry.

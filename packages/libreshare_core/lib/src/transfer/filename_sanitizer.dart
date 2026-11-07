@@ -248,6 +248,30 @@ String withCollisionSuffix(
   return '$cutStem$suffix$ext';
 }
 
+/// True only if [candidate] is strictly inside [root] (equal -> false).
+///
+/// [windows] null means `Platform.isWindows`. With `windows: true` the
+/// extended-length prefix is dropped (`\\?\C:\x` == `C:\x`,
+/// `\\?\UNC\h\s\x` == `\\h\s\x`), `/` and `\` are both separators, the
+/// comparison ignores case and `.`/`..` are normalised. With `windows: false`
+/// it is `package:path`'s POSIX `isWithin`.
+bool isPathWithin(String root, String candidate, {bool? windows}) {
+  if (!(windows ?? Platform.isWindows)) {
+    return p.posix.isWithin(root, candidate);
+  }
+  String norm(String s) {
+    var t = s.replaceAll('/', r'\');
+    if (t.startsWith(r'\\?\UNC\')) {
+      t = r'\\' + t.substring(8);
+    } else if (t.startsWith(r'\\?\')) {
+      t = t.substring(4);
+    }
+    return t;
+  }
+
+  return p.windows.isWithin(norm(root), norm(candidate));
+}
+
 /// Throws [LsErrorCode.badRequest] unless [path] (which need not exist yet) is
 /// strictly inside [root] after resolving symlinks of its existing ancestors.
 void assertInsideDir(Directory root, String path) {
@@ -278,7 +302,7 @@ void assertInsideDir(Directory root, String path) {
     throw escape('unresolvable link');
   }
   final resolved = tail.isEmpty ? real : p.joinAll([real, ...tail]);
-  if (!p.isWithin(rootReal, resolved)) throw escape('outside');
+  if (!isPathWithin(rootReal, resolved)) throw escape('outside');
 }
 
 String _realOrSelf(String dir) {
@@ -357,7 +381,7 @@ File resolveTarget({
       if (type == FileSystemEntityType.link) {
         final resolved = _resolveDirLink(candPath);
         if (resolved != null &&
-            (resolved == rootReal || p.isWithin(rootReal, resolved))) {
+            (resolved == rootReal || isPathWithin(rootReal, resolved))) {
           cur = candPath;
           curReal = resolved;
           break;
@@ -379,7 +403,7 @@ File resolveTarget({
 
   File accept(String candidate) {
     final resolved = p.join(curReal, candidate);
-    if (!p.isWithin(rootReal, resolved)) {
+    if (!isPathWithin(rootReal, resolved)) {
       throw LsException(
         LsErrorCode.badRequest,
         'target path escapes download directory',

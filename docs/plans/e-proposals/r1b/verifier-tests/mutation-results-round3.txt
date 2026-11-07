@@ -1,0 +1,274 @@
+=== none start 2026-11-06 21:13:21
+rc=0
+00:04 +92: All tests passed!
+restore diff -r rc=0
+=== a start 2026-11-06 21:13:30
+rc=1
+test/unit/atomic_file_adoption_test.dart: FileReceiver final move guard receiver-final-move-windows: with a Windows-like rename the transfer still completes and leaves no .lspart [E]
+test/unit/atomic_file_adoption_test.dart: FileReceiveSettingsStore guard receive_settings-replace-fallback: Windows-like rename, save twice: second value loads, no litter [E]
+test/unit/atomic_file_adoption_test.dart: FileSecretStore guard secret_store-replace-fallback+0600: Windows-like rename, put twice: new value reads back and the file is still 0600 [E]
+test/unit/atomic_file_adoption_test.dart: ResumeStore sidecar guard resume_store-replace-fallback: Windows-like rename, many persists: sidecar stays valid and current, no litter [E]
+test/unit/atomic_file_test.dart: Windows-like rename (refuses to replace an existing file) guard replace-fallback: atomicReplace(tmp, target) works too and consumes the tmp file [E]
+test/unit/atomic_file_test.dart: Windows-like rename (refuses to replace an existing file) guard replace-fallback: replacing an existing target works, repeatedly, with no backup/tmp litter [E]
+test/unit/atomic_file_verifier_mutation_test.dart: V-receiver-copy-fallback-uses-helper: after the cross-device copy the final rename of <target>.lspart-<hex> goes through the helper and works with a Windows-like rename and an existing target [E]
+test/unit/atomic_file_verifier_mutation_test.dart: V-restore: commit refused, move-aside works, 2nd commit fails, restore works -> OLD bytes back at the target, no litter [E]
+test/unit/atomic_file_verifier_probes_test.dart: P3 double failure / crash between the two renames P3a second rename throws AND the restore throws: where do the old bytes live? [E]
+test/unit/atomic_file_verifier_probes_test.dart: P3 double failure / crash between the two renames P3b "crash" with rename 3 hanging forever: state a restart finds [E]
+test/unit/atomic_file_verifier_probes_test.dart: P5 edge targets path with spaces and non-ASCII characters (fresh and replace, also with a Windows-like rename) [E]
+test/unit/atomic_file_verifier_probes_test.dart: P6 permissions mode 0600 also when a 0644 target exists and a Windows-like rename forces the move-aside path (the .bak keeps the OLD mode) [E]
+test/unit/atomic_file_verifier_v2_test.dart: F1 errno filter V2-F1-noerrno: a failure WITHOUT an OS error still takes the move-aside fallback (only a known-hopeless errno skips it) [E]
+test/unit/atomic_file_verifier_v2_test.dart: F1 errno filter V2-F1-other-errno: a different errno (EACCES 13) also takes the fallback [E]
+test/unit/atomic_file_verifier_v2_test.dart: FileReceiver and a user-owned <target>.bak FINDING V2-receiver-user-bak-windows: same with a Windows-like rename (the move-aside path must not clobber an existing "notes.txt.bak") [E]
+test/unit/atomic_file_verifier_v2_test.dart: fixed <target>.bak and stale-bak rules V2-bak-name: during the window the old bytes live in exactly <target>.bak (no random suffix) [E]
+test/unit/atomic_file_verifier_v2_test.dart: fixed <target>.bak and stale-bak rules V2-stale-bak-removed: a stale <target>.bak next to an EXISTING target does not block a Windows-like replace and is gone after [E]
+test/unit/atomic_file_verifier_v2_test.dart: recoverAtomicBackup V2-recover-after-double-failure: the sequence that strands the old data is fully repaired by recoverAtomicBackup [E]
+test/unit/atomic_file_verifier_v3_test.dart: atomicReplace never touches a file it did not create V3-backup-name: during the window the old bytes are in exactly one "<t>.lsbak-<hex>" (never "<t>.bak"), removed after the commit [E]
+test/unit/atomic_file_verifier_v3_test.dart: atomicReplace never touches a file it did not create V3-crash-window: commit hangs forever (process dies): the old bytes are in one .lsbak-<hex>, the new in .tmp, target absent - and recoverAtomicBackup (fixed name only) does NOT find it (known limit) [E]
+test/unit/atomic_file_verifier_v3_test.dart: atomicReplace never touches a file it did not create V3-double-failure: 2nd rename and restore fail: target absent, the old bytes sit in exactly one .lsbak-<hex>, tmp left for the caller, error is the FIRST one [E]
+test/unit/atomic_file_verifier_v3_test.dart: atomicReplace never touches a file it did not create V3-user-bak-windows: Windows-like refusal + a user "<t>.bak": replaced, user file untouched, no litter [E]
+test/unit/atomic_file_verifier_v3_test.dart: errno list V3-errno-5-still-falls-back: EIO(5) takes the fallback (the tester's simulations rely on it) [E]
+test/unit/atomic_file_verifier_v3_test.dart: fixedBak split (atomicWriteBytes keeps the fixed name) V3-fixed-in-write: atomicWriteBytes window uses "<t>.bak" and a stale "<t>.bak" is replaced, not a ".lsbak-" name [E]
+00:03 +68 -24: Some tests failed.
+restore diff -r rc=0
+=== b start 2026-11-06 21:13:35
+rc=1
+test/unit/atomic_file_adoption_test.dart: FileReceiveSettingsStore guard receive_settings-cleanup: rename fails -> save throws, OLD settings still load, no .tmp litter [E]
+test/unit/atomic_file_adoption_test.dart: FileSecretStore guard secret_store-cleanup: rename fails -> put throws SecretStoreException, OLD secret intact, no litter [E]
+test/unit/atomic_file_adoption_test.dart: ResumeStore sidecar guard resume_store-cleanup: the rename fails -> persist throws, the OLD sidecar is intact, no .tmp litter [E]
+test/unit/atomic_file_test.dart: atomicReplace guard never-delete-before-commit: locked old target -> throws, OLD bytes intact [E]
+test/unit/atomic_file_test.dart: atomicWriteBytes failure leaves the OLD file guard cleanup-on-rename-failure: every rename fails -> throws, OLD bytes intact, no tmp/backup litter [E]
+test/unit/atomic_file_test.dart: atomicWriteBytes failure leaves the OLD file guard never-delete-before-commit: the old file is locked (cannot be replaced or moved) -> throws, OLD bytes intact, no litter [E]
+test/unit/atomic_file_verifier_mutation_test.dart: V-restore (atomicReplace): same sequence directly on atomicReplace: old target restored, tmp left for the caller [E]
+test/unit/atomic_file_verifier_mutation_test.dart: V-restore: commit refused, move-aside works, 2nd commit fails, restore works -> OLD bytes back at the target, no litter [E]
+test/unit/atomic_file_verifier_probes_test.dart: P3 double failure / crash between the two renames P3a second rename throws AND the restore throws: where do the old bytes live? [E]
+test/unit/atomic_file_verifier_probes_test.dart: P3 double failure / crash between the two renames P3b "crash" with rename 3 hanging forever: state a restart finds [E]
+test/unit/atomic_file_verifier_v2_test.dart: fixed <target>.bak and stale-bak rules V2-bak-name: during the window the old bytes live in exactly <target>.bak (no random suffix) [E]
+test/unit/atomic_file_verifier_v2_test.dart: recoverAtomicBackup V2-recover-after-double-failure: the sequence that strands the old data is fully repaired by recoverAtomicBackup [E]
+test/unit/atomic_file_verifier_v2_test.dart: symlinked tmp, queue key, error identity V2-first-error-moveaside: when the move-aside itself fails, the error thrown is the FIRST rename error and the old target is intact [E]
+test/unit/atomic_file_verifier_v2_test.dart: symlinked tmp, queue key, error identity V2-first-error: when the retry sequence fails, the error thrown is the FIRST rename error, not a later one [E]
+test/unit/atomic_file_verifier_v3_test.dart: atomicReplace never touches a file it did not create V3-backup-name: during the window the old bytes are in exactly one "<t>.lsbak-<hex>" (never "<t>.bak"), removed after the commit [E]
+test/unit/atomic_file_verifier_v3_test.dart: atomicReplace never touches a file it did not create V3-crash-window: commit hangs forever (process dies): the old bytes are in one .lsbak-<hex>, the new in .tmp, target absent - and recoverAtomicBackup (fixed name only) does NOT find it (known limit) [E]
+test/unit/atomic_file_verifier_v3_test.dart: atomicReplace never touches a file it did not create V3-double-failure: 2nd rename and restore fail: target absent, the old bytes sit in exactly one .lsbak-<hex>, tmp left for the caller, error is the FIRST one [E]
+test/unit/atomic_file_verifier_v3_test.dart: fixedBak split (atomicWriteBytes keeps the fixed name) V3-fixed-in-write: atomicWriteBytes window uses "<t>.bak" and a stale "<t>.bak" is replaced, not a ".lsbak-" name [E]
+00:03 +74 -18: Some tests failed.
+restore diff -r rc=0
+=== c start 2026-11-06 21:13:40
+rc=1
+test/unit/atomic_file_verifier_mutation_test.dart: V-restore (atomicReplace): same sequence directly on atomicReplace: old target restored, tmp left for the caller [E]
+test/unit/atomic_file_verifier_mutation_test.dart: V-restore: commit refused, move-aside works, 2nd commit fails, restore works -> OLD bytes back at the target, no litter [E]
+test/unit/atomic_file_verifier_v2_test.dart: symlinked tmp, queue key, error identity V2-first-error: when the retry sequence fails, the error thrown is the FIRST rename error, not a later one [E]
+00:03 +89 -3: Some tests failed.
+restore diff -r rc=0
+=== d start 2026-11-06 21:13:44
+rc=1
+test/unit/atomic_file_adoption_test.dart: FileReceiveSettingsStore guard receive_settings-cleanup: rename fails -> save throws, OLD settings still load, no .tmp litter [E]
+test/unit/atomic_file_adoption_test.dart: FileSecretStore guard secret_store-cleanup: rename fails -> put throws SecretStoreException, OLD secret intact, no litter [E]
+test/unit/atomic_file_adoption_test.dart: ResumeStore sidecar guard resume_store-cleanup: the rename fails -> persist throws, the OLD sidecar is intact, no .tmp litter [E]
+test/unit/atomic_file_test.dart: atomicWriteBytes failure leaves the OLD file guard cleanup-on-rename-failure: every rename fails and the target did not exist -> throws, no target, no litter [E]
+test/unit/atomic_file_test.dart: atomicWriteBytes failure leaves the OLD file guard cleanup-on-rename-failure: every rename fails -> throws, OLD bytes intact, no tmp/backup litter [E]
+test/unit/atomic_file_test.dart: atomicWriteBytes failure leaves the OLD file guard never-delete-before-commit: the old file is locked (cannot be replaced or moved) -> throws, OLD bytes intact, no litter [E]
+test/unit/atomic_file_test.dart: atomicWriteBytes failure leaves the OLD file guard prepareTmp-failure-cleanup: prepareTmp throws -> rethrown, OLD bytes intact, no litter, no byte was written first [E]
+test/unit/atomic_file_test.dart: atomicWriteBytes failure leaves the OLD file guard real-fs-failure-cleanup: the rename fails for real (target path is a non-empty directory) -> throws, the directory and its child survive, no tmp litter [E]
+test/unit/atomic_file_verifier_mutation_test.dart: V-restore: commit refused, move-aside works, 2nd commit fails, restore works -> OLD bytes back at the target, no litter [E]
+test/unit/atomic_file_verifier_probes_test.dart: P1 cross-filesystem (EXDEV) rename with an existing target P1a helper-level: EXDEV on tmp->target, target exists: final bytes, litter, rename sequence and missing-target window [E]
+test/unit/atomic_file_verifier_probes_test.dart: P3 double failure / crash between the two renames P3a second rename throws AND the restore throws: where do the old bytes live? [E]
+test/unit/atomic_file_verifier_probes_test.dart: P6 permissions FileSecretStore: chmod failure -> SecretStoreException, no tmp, OLD secret intact [E]
+test/unit/atomic_file_verifier_v2_test.dart: F1 errno filter V2-F1-18: errno 18 on tmp->target with an existing target: ONE rename attempt, no move-aside, target never missing, old bytes, no litter [E]
+test/unit/atomic_file_verifier_v2_test.dart: F1 errno filter V2-F1-28: errno 28 on tmp->target with an existing target: ONE rename attempt, no move-aside, target never missing, old bytes, no litter [E]
+test/unit/atomic_file_verifier_v2_test.dart: fixed <target>.bak and stale-bak rules V2-bak-survives-failed-write: target MISSING + <target>.bak (only copy of the old data) + a failing write: bak untouched, still the same bytes [E]
+test/unit/atomic_file_verifier_v2_test.dart: fixed <target>.bak and stale-bak rules V2-target-is-directory: target is a directory, Windows-like denial: throws, directory and child intact, no bak, no tmp [E]
+test/unit/atomic_file_verifier_v2_test.dart: recoverAtomicBackup V2-recover-after-double-failure: the sequence that strands the old data is fully repaired by recoverAtomicBackup [E]
+test/unit/atomic_file_verifier_v2_test.dart: symlinked tmp, queue key, error identity V2-first-error-moveaside: when the move-aside itself fails, the error thrown is the FIRST rename error and the old target is intact [E]
+00:03 +74 -18: Some tests failed.
+restore diff -r rc=0
+=== e start 2026-11-06 21:13:49
+rc=1
+test/unit/atomic_file_verifier_mutation_test.dart: V-stale-tmp-readonly: a stale read-only <target>.tmp (crash leftover) does not block the write [E]
+00:03 +91 -1: Some tests failed.
+restore diff -r rc=0
+=== f start 2026-11-06 21:13:54
+rc=1
+test/unit/atomic_file_test.dart: concurrency guard no-torn-reads: 8 writers x 5 rounds on one target while a reader polls: every read is exactly one writer payload; all writes complete; no litter [E]
+test/unit/atomic_file_verifier_probes_test.dart: P4 concurrency FINDING P4b the same target spelled two ways (./ and plain) must also be serialised [E]
+test/unit/atomic_file_verifier_probes_test.dart: P4 concurrency two writers to one target are serialised, a writer to ANOTHER target is not delayed behind them (no global lock) [E]
+test/unit/atomic_file_verifier_v2_test.dart: symlinked tmp, queue key, error identity V2-queue-key-dotdot: the same target as dir/sub/../state.json and dir/state.json is serialised (no failure, one payload wins) [E]
+00:03 +88 -4: Some tests failed.
+restore diff -r rc=0
+=== g start 2026-11-06 21:13:58
+rc=1
+test/unit/atomic_file_verifier_mutation_test.dart: V-mode-before-bytes: with mode 0600 the tmp is already 0600 when the FIRST byte is written (checked inside prepareTmp, which runs before any byte, and via a poll of the committed hook) [E]
+test/unit/atomic_file_verifier_probes_test.dart: P6 permissions mode 0600: the tmp is 0600 and EMPTY inside prepareTmp, 0600 when committed, 0600 after [E]
+00:03 +90 -2: Some tests failed.
+restore diff -r rc=0
+=== h1 start 2026-11-06 21:14:03
+rc=1
+test/unit/atomic_file_adoption_test.dart: FileReceiver final move guard receiver-final-move-windows: with a Windows-like rename the transfer still completes and leaves no .lspart [E]
+test/unit/atomic_file_adoption_test.dart: FileReceiveSettingsStore guard receive_settings-replace-fallback: Windows-like rename, save twice: second value loads, no litter [E]
+test/unit/atomic_file_adoption_test.dart: FileSecretStore guard secret_store-replace-fallback+0600: Windows-like rename, put twice: new value reads back and the file is still 0600 [E]
+test/unit/atomic_file_adoption_test.dart: ResumeStore sidecar guard resume_store-replace-fallback: Windows-like rename, many persists: sidecar stays valid and current, no litter [E]
+test/unit/atomic_file_test.dart: Windows-like rename (refuses to replace an existing file) guard replace-fallback: atomicReplace(tmp, target) works too and consumes the tmp file [E]
+test/unit/atomic_file_test.dart: Windows-like rename (refuses to replace an existing file) guard replace-fallback: replacing an existing target works, repeatedly, with no backup/tmp litter [E]
+test/unit/atomic_file_verifier_mutation_test.dart: V-receiver-copy-fallback-uses-helper: after the cross-device copy the final rename of <target>.lspart-<hex> goes through the helper and works with a Windows-like rename and an existing target [E]
+test/unit/atomic_file_verifier_probes_test.dart: P5 edge targets path with spaces and non-ASCII characters (fresh and replace, also with a Windows-like rename) [E]
+test/unit/atomic_file_verifier_probes_test.dart: P6 permissions mode 0600 also when a 0644 target exists and a Windows-like rename forces the move-aside path (the .bak keeps the OLD mode) [E]
+test/unit/atomic_file_verifier_v2_test.dart: F1 errno filter V2-F1-noerrno: a failure WITHOUT an OS error still takes the move-aside fallback (only a known-hopeless errno skips it) [E]
+test/unit/atomic_file_verifier_v2_test.dart: F1 errno filter V2-F1-other-errno: a different errno (EACCES 13) also takes the fallback [E]
+test/unit/atomic_file_verifier_v2_test.dart: fixed <target>.bak and stale-bak rules V2-bak-name: during the window the old bytes live in exactly <target>.bak (no random suffix) [E]
+test/unit/atomic_file_verifier_v2_test.dart: fixed <target>.bak and stale-bak rules V2-stale-bak-removed: a stale <target>.bak next to an EXISTING target does not block a Windows-like replace and is gone after [E]
+test/unit/atomic_file_verifier_v3_test.dart: atomicReplace never touches a file it did not create V3-backup-name: during the window the old bytes are in exactly one "<t>.lsbak-<hex>" (never "<t>.bak"), removed after the commit [E]
+test/unit/atomic_file_verifier_v3_test.dart: atomicReplace never touches a file it did not create V3-user-bak-windows: Windows-like refusal + a user "<t>.bak": replaced, user file untouched, no litter [E]
+test/unit/atomic_file_verifier_v3_test.dart: attempts to break it V3-concurrent-replace: 6 UNQUEUED atomicReplace calls to one target (receiver style, Windows-like refusal): no exception other than FileSystemException, final target is the old or exactly one new payload, no backup litter, every un-consumed tmp still has its bytes [E]
+test/unit/atomic_file_verifier_v3_test.dart: errno list V3-errno-5-still-falls-back: EIO(5) takes the fallback (the tester's simulations rely on it) [E]
+test/unit/atomic_file_verifier_v3_test.dart: fixedBak split (atomicWriteBytes keeps the fixed name) V3-fixed-in-write: atomicWriteBytes window uses "<t>.bak" and a stale "<t>.bak" is replaced, not a ".lsbak-" name [E]
+00:03 +74 -18: Some tests failed.
+restore diff -r rc=0
+=== h2 start 2026-11-06 21:14:08
+rc=1
+test/unit/atomic_file_verifier_v2_test.dart: fixed <target>.bak and stale-bak rules V2-bak-removed-after-plain-success: target MISSING + stale bak + a successful write: bak removed (documented rule) [E]
+00:03 +91 -1: Some tests failed.
+restore diff -r rc=0
+=== i start 2026-11-06 21:14:13
+rc=1
+test/unit/atomic_file_adoption_test.dart: FileReceiver final move guard receiver-final-move-uses-helper: the .lspart -> target move goes through the shared rename [E]
+test/unit/atomic_file_verifier_mutation_test.dart: V-receiver-copy-fallback-uses-helper: after the cross-device copy the final rename of <target>.lspart-<hex> goes through the helper and works with a Windows-like rename and an existing target [E]
+test/unit/atomic_file_verifier_probes_test.dart: P1 cross-filesystem (EXDEV) rename with an existing target P1c FileReceiver partialDir fallback still works with an existing target (race: target appears while the first rename fails) [E]
+test/unit/atomic_file_verifier_probes_test.dart: P1 cross-filesystem (EXDEV) rename with an existing target P1d FileReceiver partialDir fallback, no existing target (normal cross-device case) [E]
+00:03 +88 -4: Some tests failed.
+restore diff -r rc=0
+=== i2 start 2026-11-06 21:14:17
+rc=1
+test/unit/atomic_file_verifier_mutation_test.dart: V-receiver-copy-fallback-uses-helper: after the cross-device copy the final rename of <target>.lspart-<hex> goes through the helper and works with a Windows-like rename and an existing target [E]
+00:03 +91 -1: Some tests failed.
+restore diff -r rc=0
+=== j start 2026-11-06 21:14:22
+rc=1
+test/unit/atomic_file_verifier_probes_test.dart: P1 cross-filesystem (EXDEV) rename with an existing target FINDING P1b needless move-aside: an EXDEV refusal must not move the old target away (the target must never be missing) [E]
+test/unit/atomic_file_verifier_v2_test.dart: F1 errno filter V2-F1-18: errno 18 on tmp->target with an existing target: ONE rename attempt, no move-aside, target never missing, old bytes, no litter [E]
+test/unit/atomic_file_verifier_v2_test.dart: F1 errno filter V2-F1-28: errno 28 on tmp->target with an existing target: ONE rename attempt, no move-aside, target never missing, old bytes, no litter [E]
+test/unit/atomic_file_verifier_v3_test.dart: attempts to break it V3-other-filesystem: a REAL cross-device rename (/dev/shm -> temp) with an existing target: error, ONE rename, old target intact, target never missing [E]
+test/unit/atomic_file_verifier_v3_test.dart: errno list V3-errno-122: errno 122 (EROFS/EDQUOT) on tmp->target with an existing target: ONE attempt, target never missing [E]
+test/unit/atomic_file_verifier_v3_test.dart: errno list V3-errno-30: errno 30 (EROFS/EDQUOT) on tmp->target with an existing target: ONE attempt, target never missing [E]
+00:03 +86 -6: Some tests failed.
+restore diff -r rc=0
+=== k start 2026-11-06 21:14:27
+rc=1
+test/unit/atomic_file_verifier_v2_test.dart: F1 errno filter V2-F1-noerrno: a failure WITHOUT an OS error still takes the move-aside fallback (only a known-hopeless errno skips it) [E]
+00:03 +91 -1: Some tests failed.
+restore diff -r rc=0
+=== l start 2026-11-06 21:14:31
+rc=1
+test/unit/atomic_file_verifier_v2_test.dart: fixed <target>.bak and stale-bak rules V2-stale-bak-removed: a stale <target>.bak next to an EXISTING target does not block a Windows-like replace and is gone after [E]
+00:03 +91 -1: Some tests failed.
+restore diff -r rc=0
+=== n start 2026-11-06 21:14:36
+rc=1
+test/unit/atomic_file_verifier_probes_test.dart: P2 symlink / directory named <target>.tmp FINDING P2b symlinked tmp must not write THROUGH the link: the other file must stay untouched [E]
+test/unit/atomic_file_verifier_probes_test.dart: P2 symlink / directory named <target>.tmp P2a symlinked tmp (v2 contract): the link is removed, the OTHER file is untouched, the target is a regular file with the new bytes; (the pre-patch code wrote through the link, printed for comparison) [E]
+test/unit/atomic_file_verifier_v2_test.dart: symlinked tmp, queue key, error identity V2-dangling-symlink-tmp: a DANGLING symlink at <target>.tmp is removed and nothing is created at its destination [E]
+00:03 +89 -3: Some tests failed.
+restore diff -r rc=0
+=== o start 2026-11-06 21:14:41
+rc=1
+test/unit/atomic_file_verifier_probes_test.dart: P4 concurrency FINDING P4b the same target spelled two ways (./ and plain) must also be serialised [E]
+test/unit/atomic_file_verifier_v2_test.dart: symlinked tmp, queue key, error identity V2-queue-key-dotdot: the same target as dir/sub/../state.json and dir/state.json is serialised (no failure, one payload wins) [E]
+00:03 +90 -2: Some tests failed.
+restore diff -r rc=0
+=== p start 2026-11-06 21:14:45
+rc=1
+test/unit/atomic_file_verifier_v2_test.dart: recoverAtomicBackup V2-recover-keeps-existing-target: target EXISTS + bak -> returns false, target keeps its (newer) bytes, bak untouched [E]
+00:03 +91 -1: Some tests failed.
+restore diff -r rc=0
+=== q start 2026-11-06 21:14:50
+rc=1
+test/unit/atomic_file_verifier_v2_test.dart: symlinked tmp, queue key, error identity V2-first-error-moveaside: when the move-aside itself fails, the error thrown is the FIRST rename error and the old target is intact [E]
+00:03 +91 -1: Some tests failed.
+restore diff -r rc=0
+=== r start 2026-11-06 21:14:55
+rc=1
+test/unit/atomic_file_verifier_v2_test.dart: symlinked tmp, queue key, error identity V2-first-error: when the retry sequence fails, the error thrown is the FIRST rename error, not a later one [E]
+test/unit/atomic_file_verifier_v3_test.dart: atomicReplace never touches a file it did not create V3-double-failure: 2nd rename and restore fail: target absent, the old bytes sit in exactly one .lsbak-<hex>, tmp left for the caller, error is the FIRST one [E]
+00:03 +90 -2: Some tests failed.
+restore diff -r rc=0
+=== s start 2026-11-06 21:14:59
+rc=1
+test/unit/atomic_file_verifier_v3_test.dart: atomicReplace never touches a file it did not create V3-backup-name: during the window the old bytes are in exactly one "<t>.lsbak-<hex>" (never "<t>.bak"), removed after the commit [E]
+test/unit/atomic_file_verifier_v3_test.dart: atomicReplace never touches a file it did not create V3-crash-window: commit hangs forever (process dies): the old bytes are in one .lsbak-<hex>, the new in .tmp, target absent - and recoverAtomicBackup (fixed name only) does NOT find it (known limit) [E]
+test/unit/atomic_file_verifier_v3_test.dart: atomicReplace never touches a file it did not create V3-double-failure: 2nd rename and restore fail: target absent, the old bytes sit in exactly one .lsbak-<hex>, tmp left for the caller, error is the FIRST one [E]
+test/unit/atomic_file_verifier_v3_test.dart: atomicReplace never touches a file it did not create V3-user-bak-windows: Windows-like refusal + a user "<t>.bak": replaced, user file untouched, no litter [E]
+00:03 +88 -4: Some tests failed.
+restore diff -r rc=0
+=== t start 2026-11-06 21:15:04
+rc=1
+test/unit/atomic_file_verifier_v2_test.dart: FileReceiver and a user-owned <target>.bak FINDING V2-receiver-user-bak: receiving "notes.txt" must not delete a user file "notes.txt.bak" that already sits in the download directory [E]
+test/unit/atomic_file_verifier_v2_test.dart: FileReceiver and a user-owned <target>.bak FINDING V2-receiver-user-bak-windows: same with a Windows-like rename (the move-aside path must not clobber an existing "notes.txt.bak") [E]
+test/unit/atomic_file_verifier_v3_test.dart: atomicReplace never touches a file it did not create V3-user-bak-plain: plain success + a user "<t>.bak" and a user "<t>.lsbak-deadbeef": both survive [E]
+00:03 +89 -3: Some tests failed.
+restore diff -r rc=0
+=== u start 2026-11-06 21:15:09
+rc=1
+test/unit/atomic_file_verifier_v2_test.dart: FileReceiver and a user-owned <target>.bak FINDING V2-receiver-user-bak: receiving "notes.txt" must not delete a user file "notes.txt.bak" that already sits in the download directory [E]
+test/unit/atomic_file_verifier_v2_test.dart: FileReceiver and a user-owned <target>.bak FINDING V2-receiver-user-bak-windows: same with a Windows-like rename (the move-aside path must not clobber an existing "notes.txt.bak") [E]
+test/unit/atomic_file_verifier_v3_test.dart: atomicReplace never touches a file it did not create V3-backup-name: during the window the old bytes are in exactly one "<t>.lsbak-<hex>" (never "<t>.bak"), removed after the commit [E]
+test/unit/atomic_file_verifier_v3_test.dart: atomicReplace never touches a file it did not create V3-crash-window: commit hangs forever (process dies): the old bytes are in one .lsbak-<hex>, the new in .tmp, target absent - and recoverAtomicBackup (fixed name only) does NOT find it (known limit) [E]
+test/unit/atomic_file_verifier_v3_test.dart: atomicReplace never touches a file it did not create V3-double-failure: 2nd rename and restore fail: target absent, the old bytes sit in exactly one .lsbak-<hex>, tmp left for the caller, error is the FIRST one [E]
+test/unit/atomic_file_verifier_v3_test.dart: atomicReplace never touches a file it did not create V3-user-bak-plain: plain success + a user "<t>.bak" and a user "<t>.lsbak-deadbeef": both survive [E]
+test/unit/atomic_file_verifier_v3_test.dart: atomicReplace never touches a file it did not create V3-user-bak-windows: Windows-like refusal + a user "<t>.bak": replaced, user file untouched, no litter [E]
+00:03 +85 -7: Some tests failed.
+restore diff -r rc=0
+=== v start 2026-11-06 21:15:13
+rc=1
+test/unit/atomic_file_verifier_probes_test.dart: P3 double failure / crash between the two renames P3a second rename throws AND the restore throws: where do the old bytes live? [E]
+test/unit/atomic_file_verifier_probes_test.dart: P3 double failure / crash between the two renames P3b "crash" with rename 3 hanging forever: state a restart finds [E]
+test/unit/atomic_file_verifier_v2_test.dart: fixed <target>.bak and stale-bak rules V2-bak-name: during the window the old bytes live in exactly <target>.bak (no random suffix) [E]
+test/unit/atomic_file_verifier_v2_test.dart: fixed <target>.bak and stale-bak rules V2-bak-removed-after-plain-success: target MISSING + stale bak + a successful write: bak removed (documented rule) [E]
+test/unit/atomic_file_verifier_v2_test.dart: fixed <target>.bak and stale-bak rules V2-stale-bak-removed: a stale <target>.bak next to an EXISTING target does not block a Windows-like replace and is gone after [E]
+test/unit/atomic_file_verifier_v2_test.dart: recoverAtomicBackup V2-recover-after-double-failure: the sequence that strands the old data is fully repaired by recoverAtomicBackup [E]
+test/unit/atomic_file_verifier_v3_test.dart: fixedBak split (atomicWriteBytes keeps the fixed name) V3-fixed-in-write: atomicWriteBytes window uses "<t>.bak" and a stale "<t>.bak" is replaced, not a ".lsbak-" name [E]
+00:03 +85 -7: Some tests failed.
+restore diff -r rc=0
+=== w start 2026-11-06 21:15:18
+rc=0
+00:03 +92: All tests passed!
+restore diff -r rc=0
+=== x start 2026-11-06 21:15:23
+rc=1
+test/unit/atomic_file_verifier_v3_test.dart: errno list V3-errno-30: errno 30 (EROFS/EDQUOT) on tmp->target with an existing target: ONE attempt, target never missing [E]
+00:03 +91 -1: Some tests failed.
+restore diff -r rc=0
+=== y start 2026-11-06 21:15:27
+rc=1
+test/unit/atomic_file_verifier_v3_test.dart: errno list V3-errno-122: errno 122 (EROFS/EDQUOT) on tmp->target with an existing target: ONE attempt, target never missing [E]
+00:03 +91 -1: Some tests failed.
+restore diff -r rc=0
+=== z start 2026-11-06 21:15:32
+rc=1
+test/unit/atomic_file_verifier_v2_test.dart: F1 errno filter V2-F1-28: errno 28 on tmp->target with an existing target: ONE rename attempt, no move-aside, target never missing, old bytes, no litter [E]
+00:03 +91 -1: Some tests failed.
+restore diff -r rc=0
+=== aa start 2026-11-06 21:15:37
+rc=1
+test/unit/atomic_file_adoption_test.dart: FileReceiver final move guard receiver-final-move-windows: with a Windows-like rename the transfer still completes and leaves no .lspart [E]
+test/unit/atomic_file_adoption_test.dart: FileReceiveSettingsStore guard receive_settings-replace-fallback: Windows-like rename, save twice: second value loads, no litter [E]
+test/unit/atomic_file_adoption_test.dart: FileSecretStore guard secret_store-replace-fallback+0600: Windows-like rename, put twice: new value reads back and the file is still 0600 [E]
+test/unit/atomic_file_adoption_test.dart: ResumeStore sidecar guard resume_store-replace-fallback: Windows-like rename, many persists: sidecar stays valid and current, no litter [E]
+test/unit/atomic_file_test.dart: Windows-like rename (refuses to replace an existing file) guard replace-fallback: atomicReplace(tmp, target) works too and consumes the tmp file [E]
+test/unit/atomic_file_test.dart: Windows-like rename (refuses to replace an existing file) guard replace-fallback: replacing an existing target works, repeatedly, with no backup/tmp litter [E]
+test/unit/atomic_file_verifier_mutation_test.dart: V-receiver-copy-fallback-uses-helper: after the cross-device copy the final rename of <target>.lspart-<hex> goes through the helper and works with a Windows-like rename and an existing target [E]
+test/unit/atomic_file_verifier_mutation_test.dart: V-restore: commit refused, move-aside works, 2nd commit fails, restore works -> OLD bytes back at the target, no litter [E]
+test/unit/atomic_file_verifier_probes_test.dart: P3 double failure / crash between the two renames P3a second rename throws AND the restore throws: where do the old bytes live? [E]
+test/unit/atomic_file_verifier_probes_test.dart: P3 double failure / crash between the two renames P3b "crash" with rename 3 hanging forever: state a restart finds [E]
+test/unit/atomic_file_verifier_probes_test.dart: P5 edge targets path with spaces and non-ASCII characters (fresh and replace, also with a Windows-like rename) [E]
+test/unit/atomic_file_verifier_probes_test.dart: P6 permissions mode 0600 also when a 0644 target exists and a Windows-like rename forces the move-aside path (the .bak keeps the OLD mode) [E]
+test/unit/atomic_file_verifier_v2_test.dart: FileReceiver and a user-owned <target>.bak FINDING V2-receiver-user-bak-windows: same with a Windows-like rename (the move-aside path must not clobber an existing "notes.txt.bak") [E]
+test/unit/atomic_file_verifier_v2_test.dart: fixed <target>.bak and stale-bak rules V2-bak-name: during the window the old bytes live in exactly <target>.bak (no random suffix) [E]
+test/unit/atomic_file_verifier_v2_test.dart: fixed <target>.bak and stale-bak rules V2-stale-bak-removed: a stale <target>.bak next to an EXISTING target does not block a Windows-like replace and is gone after [E]
+test/unit/atomic_file_verifier_v2_test.dart: recoverAtomicBackup V2-recover-after-double-failure: the sequence that strands the old data is fully repaired by recoverAtomicBackup [E]
+test/unit/atomic_file_verifier_v3_test.dart: atomicReplace never touches a file it did not create V3-backup-name: during the window the old bytes are in exactly one "<t>.lsbak-<hex>" (never "<t>.bak"), removed after the commit [E]
+test/unit/atomic_file_verifier_v3_test.dart: atomicReplace never touches a file it did not create V3-crash-window: commit hangs forever (process dies): the old bytes are in one .lsbak-<hex>, the new in .tmp, target absent - and recoverAtomicBackup (fixed name only) does NOT find it (known limit) [E]
+test/unit/atomic_file_verifier_v3_test.dart: atomicReplace never touches a file it did not create V3-double-failure: 2nd rename and restore fail: target absent, the old bytes sit in exactly one .lsbak-<hex>, tmp left for the caller, error is the FIRST one [E]
+test/unit/atomic_file_verifier_v3_test.dart: atomicReplace never touches a file it did not create V3-user-bak-windows: Windows-like refusal + a user "<t>.bak": replaced, user file untouched, no litter [E]
+test/unit/atomic_file_verifier_v3_test.dart: errno list V3-errno-5-still-falls-back: EIO(5) takes the fallback (the tester's simulations rely on it) [E]
+test/unit/atomic_file_verifier_v3_test.dart: fixedBak split (atomicWriteBytes keeps the fixed name) V3-fixed-in-write: atomicWriteBytes window uses "<t>.bak" and a stale "<t>.bak" is replaced, not a ".lsbak-" name [E]
+00:03 +70 -22: Some tests failed.
+restore diff -r rc=0
+MUTDONE

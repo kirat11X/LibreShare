@@ -33,3 +33,11 @@ CHANGED storage/file_secret_store.dart (writeFileAtomically delegates; ChmodRunn
   - `dart analyze --fatal-infos` (core): rc=0, 0 issues. `dart format --output=none --set-exit-if-changed lib/src/storage/atomic_file.dart`: rc=0.
   - patch.diff regenerated; `patch -p1 --dry-run` on a throwaway copy of real lib/: applies (5 files).
 - The 3 red verifier tests are OBSOLETE by design, not code bugs (I may not edit tests): P2a asserts the OLD write-through-symlink behaviour (contradicts F3/P2b); P3a and P3b look for the random name `.bak-<hex>` (contradicts F2's fixed `.bak`). The tester/verifier must update them (P2a: expect other file untouched; P3a/P3b: expect exactly one `state.json.bak` holding the old bytes).
+
+## Round 3: R2-F1 fix (HIGH: atomicReplace deleted a user's `<name>.bak`), 2026-11-06
+- atomicReplace (receiver, user-visible dirs) now never reads/deletes/overwrites a file it did not create: move-aside backup is `<target>.lsbak-<hex>` (free name checked with typeSync, retried), and only that backup is deleted after a successful commit. No stale-bak logic there.
+- Fixed `<target>.bak` + stale-bak rules + `recoverAtomicBackup` apply only to atomicWriteBytes (shared internal `_replace(..., fixedBak:)`); public signatures unchanged.
+- No-fallback errno list (POSIX) now EXDEV 18, ENOSPC 28, EROFS 30, EDQUOT 122 (not EIO 5); Windows 17/112/39.
+- Known limit (R2-F2, Windows only): recoverAtomicBackup is not wired into the stores; after a double failure/crash the old data sits in `<target>.bak` until a later write or a manual recover.
+- Runs (clone, flock -o /tmp/libreshare-heavy.lock): 15:17:01 the 5 files (tester 2 + verifier probes, mutation, v2) `dart test -j 1`: rc=0, +77 (32+25+20). Core `dart test -j 1`: rc=0, +2668 ~1 (ended 15:46:29). `dart analyze --fatal-infos`: rc=0. `dart format --output=none --set-exit-if-changed atomic_file.dart`: rc=0. CLI `dart test -j 1`: rc=0, +75 (ended 15:52:19). patch.diff regenerated; `patch -p1 --dry-run` on a copy of real lib/: rc=0.
+- Note: the earlier obsolete reds (P2a, P3a, P3b) are green in this run, i.e. the verifier files were updated.

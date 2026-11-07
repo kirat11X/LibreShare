@@ -1,0 +1,95 @@
+--- a/packages/libreshare_core/lib/src/server/capped_server_socket.dart
++++ b/packages/libreshare_core/lib/src/server/capped_server_socket.dart
+@@ -123,20 +123,26 @@
+       release();
+     }
+ 
+-    final timer = Timer(_handshakeTimeout, fail);
+-    SecureSocket.secureServer(
+-      socket,
+-      ctx,
+-      requestClientCertificate: _requestClientCertificate,
+-    ).then<void>(
+-      (secure) {
++    // Phase 1 (the plain socket can still be destroyed): the client must deliver a whole first
++    // TLS record within the timeout. Phase 2: secureServer takes the fd over and cannot be
++    // aborted any more, so the slot stays counted until it settles.
++    _readFirstRecord(socket, _handshakeTimeout).then<void>((record) {
++      if (finished) return;
++      if (record == null) {
++        fail();
++        return;
++      }
++      SecureSocket.secureServer(
++        socket,
++        ctx,
++        bufferedData: record,
++        requestClientCertificate: _requestClientCertificate,
++      ).then<void>((secure) {
+         if (finished) {
+-          // Timed out or force-stopped meanwhile: drop the late socket.
+           secure.destroy();
+           return;
+         }
+         finished = true;
+-        timer.cancel();
+         _handshaking--;
+         _pending.remove(socket);
+         if (_closed) {
+@@ -151,12 +157,8 @@
+         });
+         _open.add(tracked);
+         _emit(tracked);
+-      },
+-      onError: (Object _) {
+-        timer.cancel();
+-        fail();
+-      },
+-    );
++      }, onError: (Object _) => fail());
++    });
+   }
+ 
+   void _emit(Socket s) {
+@@ -292,3 +294,41 @@
+         requireClientCertificate: requireClientCertificate,
+       );
+ }
++
++/// Reads from [s] until one whole TLS record is buffered (at most 16.6 KB). Null on timeout, close,
++/// error or a first byte that is not a TLS handshake record. The subscription is left paused.
++Future<Uint8List?> _readFirstRecord(Socket s, Duration timeout) {
++  final done = Completer<Uint8List?>();
++  final buf = BytesBuilder(copy: false);
++  final timer = Timer(timeout, () {
++    if (!done.isCompleted) done.complete(null);
++  });
++  final sub = s.listen(
++    (d) {
++      buf.add(d);
++      final b = buf.toBytes();
++      if (b[0] != 0x16) {
++        if (!done.isCompleted) done.complete(null);
++        return;
++      }
++      if (b.length >= 5) {
++        final len = (b[3] << 8) | b[4];
++        if (len > 16640) {
++          if (!done.isCompleted) done.complete(null);
++        } else if (b.length >= 5 + len && !done.isCompleted) {
++          done.complete(b);
++        }
++      }
++    },
++    onDone: () {
++      if (!done.isCompleted) done.complete(null);
++    },
++    onError: (Object _) {
++      if (!done.isCompleted) done.complete(null);
++    },
++  );
++  return done.future.whenComplete(() {
++    timer.cancel();
++    sub.pause();
++  });
++}

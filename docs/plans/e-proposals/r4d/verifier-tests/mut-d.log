@@ -1,0 +1,25 @@
+00:00 +0: loading test/unit/peer_registry_cert_cache_test.dart
+00:00 +0: (setUpAll)
+00:43 +0: GUARD per-source-cert-cap: a flood of 1100 distinct peers from one source does not evict the certificates of established contacts
+00:53 +1: GUARD per-source-cert-cap-bound: the flooding source itself keeps at most a small share, but its newest certificates
+01:03 +1 -1: GUARD per-source-cert-cap-bound: the flooding source itself keeps at most a small share, but its newest certificates [E]
+  Expected: true
+    Actual: <false>
+  the newest certificates of the source survive
+  
+  package:matcher                                     expect
+  test/unit/peer_registry_cert_cache_test.dart 103:7  main.<fn>
+  
+01:03 +1 -1: GUARD other-sources-survive: entries of other sources are untouched by the flood, including a source with several certificates
+01:13 +2 -1: GUARD new-source-still-accepted: after the flood a certificate from a new source is stored (no "refuse when full")
+01:23 +3 -1: GUARD global-bound-intact: 1100 certificates from 1100 different sources still end at no more than 1024 entries
+01:33 +4 -1: GUARD unlisted-fingerprint-bucket: a certificate whose peer is not listed is still learned (unknown-source bucket) and cannot be used to flush listed contacts
+01:43 +5 -1: GUARD relearn-refreshes: learning a contact again after the flood keeps it and a bad certificate is still refused
+01:53 +6 -1: (tearDownAll)
+01:53 +6 -1: Some tests failed.
+
+Failing tests:
+  test/unit/peer_registry_cert_cache_test.dart: GUARD per-source-cert-cap-bound: the flooding source itself keeps at most a small share, but its newest certificates
+
+Consider enabling the flag chain-stack-traces to receive more detailed exceptions.
+For example, 'dart test --chain-stack-traces'.

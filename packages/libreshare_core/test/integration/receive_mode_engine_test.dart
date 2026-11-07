@@ -11,6 +11,7 @@ import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
 import '../helpers/discovery_rig.dart';
+import '../helpers/port_blocker.dart';
 import '../helpers/test_data.dart';
 
 const _loop = '127.0.0.1';
@@ -313,12 +314,9 @@ void main() {
   });
 
   test('start() rethrows the bind error when no port is free, and the engine stays usable', () async {
-    ServerSocket blocker;
+    PortBlocker blocker;
     try {
-      blocker = await ServerSocket.bind(
-        InternetAddress.loopbackIPv4,
-        kPortFallbackMax,
-      );
+      blocker = PortBlocker.bind(kPortFallbackMax);
     } on SocketException {
       markTestSkipped('port $kPortFallbackMax is in use on this host');
       return;
@@ -331,7 +329,7 @@ void main() {
     expect(e.receive.state, isA<Failed>());
     expect(e.isRunning, isFalse);
 
-    await blocker.close();
+    blocker.close();
     await e.receive.turnOn(const ReceiveAlways());
     expect(e.receive.state, isA<On>());
     expect(e.port, kPortFallbackMax);

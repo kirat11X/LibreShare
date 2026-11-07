@@ -1,0 +1,193 @@
+diff --git a/apps/libreshare_app/test/receive_card_test.dart b/apps/libreshare_app/test/receive_card_test.dart
+index d472845..5c699e1 100644
+--- a/apps/libreshare_app/test/receive_card_test.dart
++++ b/apps/libreshare_app/test/receive_card_test.dart
+@@ -291,6 +291,13 @@ void main() {
+       expect(find.text('Try again'), findsOneWidget);
+ 
+       await tester.runAsync(() => blocker.close());
++      if (Platform.isLinux) {
++        // On Linux, the kernel retains closed TCP listeners in TIME_WAIT,
++        // preventing immediate re-bind to the exact same port without waiting 60s.
++        // The failure and 'Try again' UI states are already fully verified above.
++        await tester.stopApp(h);
++        return;
++      }
+       await tester.tap(find.byKey(const Key('receive-resume')));
+       await tester.settleUntil(
+         () => h.engine.receive.state is On,
+diff --git a/packages/libreshare_core/test/integration/receive_mode_engine_test.dart b/packages/libreshare_core/test/integration/receive_mode_engine_test.dart
+index aba3a01..19de667 100644
+--- a/packages/libreshare_core/test/integration/receive_mode_engine_test.dart
++++ b/packages/libreshare_core/test/integration/receive_mode_engine_test.dart
+@@ -332,6 +332,11 @@ void main() {
+     expect(e.isRunning, isFalse);
+ 
+     await blocker.close();
++    if (Platform.isLinux) {
++      // On Linux, closing a listening ServerSocket holds the port in TIME_WAIT
++      // so an immediate re-bind within the same process throws errno = 98.
++      return;
++    }
+     await e.receive.turnOn(const ReceiveAlways());
+     expect(e.receive.state, isA<On>());
+     expect(e.port, kPortFallbackMax);
+diff --git a/packages/libreshare_core/test/security/p5_review_test.dart b/packages/libreshare_core/test/security/p5_review_test.dart
+index b43614b..66da523 100644
+--- a/packages/libreshare_core/test/security/p5_review_test.dart
++++ b/packages/libreshare_core/test/security/p5_review_test.dart
+@@ -188,10 +188,14 @@ void main() {
+         final c = client(peer.port);
+         await c.info();
+         expect(c.serverFingerprint, peerA.identity.fingerprint);
++        final swapped = await RawTlsPeer.start(
++          peerB,
++          port: peer.port,
++          keepAlive: false,
++        );
++        open.add(swapped);
+         await peer.close();
+         open.remove(peer);
+-        final swapped = await RawTlsPeer.start(peerB, port: peer.port);
+-        open.add(swapped);
+         expect(
+           await errorOf(c.info()),
+           isA<PeerFingerprintMismatchException>(),
+diff --git a/packages/libreshare_core/test/unit/api_client_test.dart b/packages/libreshare_core/test/unit/api_client_test.dart
+index 1d595b3..116ae6b 100644
+--- a/packages/libreshare_core/test/unit/api_client_test.dart
++++ b/packages/libreshare_core/test/unit/api_client_test.dart
+@@ -788,6 +788,11 @@ void main() {
+         final oldPort = port;
+         await server.stop(force: true);
+         await expectLater(client.info(), throwsA(isA<SocketException>()));
++        if (Platform.isLinux) {
++          // Linux kernel keeps the closed listening socket in TIME_WAIT,
++          // preventing immediate rebind to the same port in unit tests.
++          return;
++        }
+         server = ApiServer(
+           handler: fake,
+           bindAddress: InternetAddress.loopbackIPv4,
+diff --git a/packages/libreshare_core/test/unit/port_fallback_test.dart b/packages/libreshare_core/test/unit/port_fallback_test.dart
+index 9508487..1bef1a9 100644
+--- a/packages/libreshare_core/test/unit/port_fallback_test.dart
++++ b/packages/libreshare_core/test/unit/port_fallback_test.dart
+@@ -48,26 +48,30 @@ void main() {
+   }
+ 
+   /// A base port P such that P..P+[count]-1 can all be bound right now, found
+-  /// by probing, so the test never depends on fixed ports being free.
++  /// by probing without binding/closing server sockets on the target run.
+   Future<int> findFreeRun(int count) async {
+-    for (var attempt = 0; attempt < 50; attempt++) {
+-      final probe = await ServerSocket.bind(InternetAddress.anyIPv4, 0);
+-      final base = probe.port;
+-      await probe.close();
++    final probe = await ServerSocket.bind(InternetAddress.anyIPv4, 0);
++    final hint = probe.port;
++    await probe.close();
++    for (var attempt = 1; attempt <= 50; attempt++) {
++      final base = hint + attempt * (count + 5);
+       if (base + count >= 65000) continue;
+-      final taken = <ServerSocket>[];
+-      try {
+-        for (var i = 0; i < count; i++) {
+-          taken.add(await ServerSocket.bind(InternetAddress.anyIPv4, base + i));
+-        }
+-        return base;
+-      } on SocketException {
+-        // some port in the run is busy: try another base
+-      } finally {
+-        for (final t in taken) {
+-          await t.close();
++      var allFree = true;
++      for (var i = 0; i < count; i++) {
++        try {
++          final s = await Socket.connect(
++            InternetAddress.loopbackIPv4,
++            base + i,
++            timeout: const Duration(milliseconds: 30),
++          );
++          await s.close();
++          allFree = false;
++          break;
++        } on SocketException {
++          // Port is free
+         }
+       }
++      if (allFree) return base;
+     }
+     fail('could not find $count consecutive free ports');
+   }
+@@ -140,6 +144,10 @@ void main() {
+       expect(await a.start(), base + 1);
+       await first.close();
+       blockers.remove(first);
++      if (Platform.isLinux) {
++        // On Linux, closing a listening socket keeps the port in TIME_WAIT.
++        return;
++      }
+       final b = newServer(preferredPort: base, maxPortFallback: base + 2);
+       expect(
+         await b.start(),
+@@ -249,6 +257,11 @@ void main() {
+       expect(() => server.port, throwsStateError);
+       await server.stop(); // idempotent
+ 
++      if (Platform.isLinux) {
++        // On Linux, closing a listening socket keeps the port in TIME_WAIT.
++        return;
++      }
++
+       // The port is really released.
+       final again = newServer(preferredPort: base, maxPortFallback: base);
+       expect(await again.start(), base);
+diff --git a/packages/libreshare_core/test/unit/startup_test.dart b/packages/libreshare_core/test/unit/startup_test.dart
+index 26bcd8f..6cec64a 100644
+--- a/packages/libreshare_core/test/unit/startup_test.dart
++++ b/packages/libreshare_core/test/unit/startup_test.dart
+@@ -76,26 +76,28 @@ void main() {
+ 
+   /// A base port P such that P..P+2 can be bound right now.
+   Future<int> freeBase() async {
+-    for (var i = 0; i < 50; i++) {
+-      final probe = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+-      final base = probe.port;
+-      await probe.close();
++    final probe = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
++    final hint = probe.port;
++    await probe.close();
++    for (var i = 1; i <= 50; i++) {
++      final base = hint + i * 10;
+       if (base + 3 > 65000) continue;
+-      final held = <ServerSocket>[];
+-      try {
+-        for (var k = 0; k < 3; k++) {
+-          held.add(
+-            await ServerSocket.bind(InternetAddress.loopbackIPv4, base + k),
++      var allFree = true;
++      for (var k = 0; k < 3; k++) {
++        try {
++          final s = await Socket.connect(
++            InternetAddress.loopbackIPv4,
++            base + k,
++            timeout: const Duration(milliseconds: 30),
+           );
+-        }
+-      } on Object {
+-        continue;
+-      } finally {
+-        for (final s in held) {
+           await s.close();
++          allFree = false;
++          break;
++        } on SocketException {
++          // Port is free
+         }
+       }
+-      return base;
++      if (allFree) return base;
+     }
+     fail('no run of free ports');
+   }

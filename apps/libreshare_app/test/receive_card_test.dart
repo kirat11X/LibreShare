@@ -9,6 +9,7 @@ import 'package:libreshare_app/providers/settings_provider.dart';
 import 'package:libreshare_core/libreshare_core.dart';
 
 import 'helpers/harness.dart';
+import 'helpers/port_blocker.dart';
 
 String status(WidgetTester tester) =>
     tester.widget<Text>(find.byKey(const Key('receive-status'))).data!;
@@ -269,7 +270,7 @@ void main() {
       final blocker = await tester.runAsync(() async {
         for (var p = 59871; ; p++) {
           try {
-            return await ServerSocket.bind(InternetAddress('127.0.0.2'), p);
+            return PortBlocker.bind(p, address: '127.0.0.2');
           } on SocketException {
             continue;
           }

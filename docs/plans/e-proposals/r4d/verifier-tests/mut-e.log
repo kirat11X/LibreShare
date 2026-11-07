@@ -1,0 +1,61 @@
+00:00 +0: loading test/unit/peer_registry_cert_cache_test.dart
+00:00 +0: (setUpAll)
+00:44 +0: GUARD per-source-cert-cap: a flood of 1100 distinct peers from one source does not evict the certificates of established contacts
+00:45 +0 -1: GUARD per-source-cert-cap: a flood of 1100 distinct peers from one source does not evict the certificates of established contacts [E]
+  Expected: true
+    Actual: <false>
+  
+  package:matcher                                    expect
+  test/unit/peer_registry_cert_cache_test.dart 60:5  main.establish
+  test/unit/peer_registry_cert_cache_test.dart 74:7  main.<fn>
+  
+00:45 +0 -1: GUARD per-source-cert-cap-bound: the flooding source itself keeps at most a small share, but its newest certificates
+00:46 +0 -2: GUARD per-source-cert-cap-bound: the flooding source itself keeps at most a small share, but its newest certificates [E]
+  Expected: true
+    Actual: <false>
+  
+  package:matcher                                    expect
+  test/unit/peer_registry_cert_cache_test.dart 60:5  main.establish
+  test/unit/peer_registry_cert_cache_test.dart 88:7  main.<fn>
+  
+00:46 +0 -2: GUARD other-sources-survive: entries of other sources are untouched by the flood, including a source with several certificates
+00:46 +0 -3: GUARD other-sources-survive: entries of other sources are untouched by the flood, including a source with several certificates [E]
+  Expected: true
+    Actual: <false>
+  
+  package:matcher                                     expect
+  test/unit/peer_registry_cert_cache_test.dart 60:5   main.establish
+  test/unit/peer_registry_cert_cache_test.dart 120:7  main.<fn>
+  
+00:46 +0 -3: GUARD new-source-still-accepted: after the flood a certificate from a new source is stored (no "refuse when full")
+00:47 +0 -4: GUARD new-source-still-accepted: after the flood a certificate from a new source is stored (no "refuse when full") [E]
+  Expected: true
+    Actual: <false>
+  
+  package:matcher                                     expect
+  test/unit/peer_registry_cert_cache_test.dart 60:5   main.establish
+  test/unit/peer_registry_cert_cache_test.dart 127:7  main.<fn>
+  
+00:47 +0 -4: GUARD global-bound-intact: 1100 certificates from 1100 different sources still end at no more than 1024 entries
+00:57 +1 -4: GUARD unlisted-fingerprint-bucket: a certificate whose peer is not listed is still learned (unknown-source bucket) and cannot be used to flush listed contacts
+01:07 +2 -4: GUARD relearn-refreshes: learning a contact again after the flood keeps it and a bad certificate is still refused
+01:08 +2 -5: GUARD relearn-refreshes: learning a contact again after the flood keeps it and a bad certificate is still refused [E]
+  Expected: true
+    Actual: <false>
+  
+  package:matcher                                     expect
+  test/unit/peer_registry_cert_cache_test.dart 60:5   main.establish
+  test/unit/peer_registry_cert_cache_test.dart 165:7  main.<fn>
+  
+01:08 +2 -5: (tearDownAll)
+01:08 +2 -5: Some tests failed.
+
+Failing tests:
+  test/unit/peer_registry_cert_cache_test.dart: GUARD new-source-still-accepted: after the flood a certificate from a new source is stored (no "refuse when full")
+  test/unit/peer_registry_cert_cache_test.dart: GUARD other-sources-survive: entries of other sources are untouched by the flood, including a source with several certificates
+  test/unit/peer_registry_cert_cache_test.dart: GUARD per-source-cert-cap-bound: the flooding source itself keeps at most a small share, but its newest certificates
+  test/unit/peer_registry_cert_cache_test.dart: GUARD per-source-cert-cap: a flood of 1100 distinct peers from one source does not evict the certificates of established contacts
+  test/unit/peer_registry_cert_cache_test.dart: GUARD relearn-refreshes: learning a contact again after the flood keeps it and a bad certificate is still refused
+
+Consider enabling the flag chain-stack-traces to receive more detailed exceptions.
+For example, 'dart test --chain-stack-traces'.

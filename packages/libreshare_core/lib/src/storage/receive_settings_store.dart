@@ -10,6 +10,7 @@ import 'dart:io';
 import 'package:logging/logging.dart';
 
 import '../receive/receive_settings.dart';
+import 'atomic_file.dart';
 
 abstract interface class ReceiveSettingsStore {
   /// Never throws: a missing, unreadable or corrupt record yields defaults.
@@ -54,8 +55,6 @@ class FileReceiveSettingsStore implements ReceiveSettingsStore {
   Future<void> _tail = Future<void>.value();
 
   File get file => File('${directory.path}${Platform.pathSeparator}$fileName');
-  File get _tmp =>
-      File('${directory.path}${Platform.pathSeparator}$fileName.tmp');
 
   @override
   Future<ReceivePersisted> load() async {
@@ -82,11 +81,9 @@ class FileReceiveSettingsStore implements ReceiveSettingsStore {
 
   Future<void> _write(ReceivePersisted data) async {
     await directory.create(recursive: true);
-    final tmp = _tmp;
-    await tmp.writeAsString(
-      const JsonEncoder.withIndent('  ').convert(data.toJson()),
-      flush: true,
+    await atomicWriteBytes(
+      file,
+      utf8.encode(const JsonEncoder.withIndent('  ').convert(data.toJson())),
     );
-    await tmp.rename(file.path);
   }
 }

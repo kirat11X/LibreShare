@@ -188,10 +188,14 @@ void main() {
         final c = client(peer.port);
         await c.info();
         expect(c.serverFingerprint, peerA.identity.fingerprint);
+        final swapped = await RawTlsPeer.start(
+          peerB,
+          port: peer.port,
+          keepAlive: false,
+        );
+        open.add(swapped);
         await peer.close();
         open.remove(peer);
-        final swapped = await RawTlsPeer.start(peerB, port: peer.port);
-        open.add(swapped);
         expect(
           await errorOf(c.info()),
           isA<PeerFingerprintMismatchException>(),

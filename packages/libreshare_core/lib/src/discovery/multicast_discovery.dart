@@ -25,6 +25,7 @@ library;
 import 'dart:async';
 
 import 'package:logging/logging.dart';
+import 'package:meta/meta.dart' show visibleForTesting;
 
 import '../clock.dart';
 import '../model/device.dart';
@@ -134,6 +135,17 @@ class MulticastDiscovery implements DeviceDiscovery {
 
   // fingerprint -> highest accepted bye ts (replay memory; outlives removal).
   final Map<String, int> _lastByeTs = {};
+
+  /// Per-source failed `bye` verifications (E5 R4b): at most
+  /// [_maxByeFailuresPerSource] in any sliding second, at most
+  /// [_maxByeFailureSources] sources tracked (oldest evicted).
+  final Map<String, List<DateTime>> _byeFailures = {};
+  static const int _maxByeFailuresPerSource = 2;
+  static const int _maxByeFailureSources = 256;
+
+  /// Number of sources currently tracked in the failed-bye table (E5 R4b). For tests.
+  @visibleForTesting
+  int get byeFailureSourceCount => _byeFailures.length;
   final List<DateTime> _byeVerifications = [];
 
   int _announcesSent = 0;
@@ -392,7 +404,7 @@ class MulticastDiscovery implements DeviceDiscovery {
     if (security.isSecure) {
       final bye = decodeBye(packet.data);
       if (bye != null) {
-        _handleBye(bye);
+        _handleBye(bye, ip);
         return;
       }
     }
@@ -458,7 +470,7 @@ class MulticastDiscovery implements DeviceDiscovery {
 
   /// LSP-1 4.2 rule 9. Cheap checks first (they do not spend the verification
   /// budget); the replay memory is written only after the signature verified.
-  void _handleBye(ByeMessage bye) {
+  void _handleBye(ByeMessage bye, String source) {
     final now = _clock.now();
     final nowMs = now.toUtc().millisecondsSinceEpoch;
     if ((nowMs - bye.ts).abs() > byeWindow.inMilliseconds) return;
@@ -474,6 +486,10 @@ class MulticastDiscovery implements DeviceDiscovery {
     final last = _lastByeTs[bye.fingerprint];
     if (last != null && bye.ts <= last) return; // replay
 
+    // A source whose byes keep failing verification is cut off before the
+    // verify, so a forger cannot spend the shared budget; it recovers once its
+    // failures are older than one second.
+    if (_byeFailureCount(source, now) >= _maxByeFailuresPerSource) return;
     if (!_takeByeBudget(now)) return;
     if (!verifySignature(
       certDer: cert,
@@ -481,6 +497,7 @@ class MulticastDiscovery implements DeviceDiscovery {
       message: byeSignedText(bye),
       signature: bye.signature,
     )) {
+      _noteByeFailure(source, now);
       return;
     }
     _lastByeTs.remove(bye.fingerprint);
@@ -489,6 +506,30 @@ class MulticastDiscovery implements DeviceDiscovery {
       _lastByeTs.remove(_lastByeTs.keys.first);
     }
     registry.remove(bye.deviceId);
+  }
+
+  int _byeFailureCount(String source, DateTime now) {
+    final list = _byeFailures[source];
+    if (list == null) return 0;
+    list.removeWhere((t) => now.difference(t) >= const Duration(seconds: 1));
+    if (list.isEmpty) {
+      _byeFailures.remove(source);
+      return 0;
+    }
+    return list.length;
+  }
+
+  void _noteByeFailure(String source, DateTime now) {
+    (_byeFailures[source] ??= []).add(now);
+    if (_byeFailures.length > _maxByeFailureSources) {
+      _byeFailures.removeWhere(
+        (_, l) =>
+            l.every((t) => now.difference(t) >= const Duration(seconds: 1)),
+      );
+      while (_byeFailures.length > _maxByeFailureSources) {
+        _byeFailures.remove(_byeFailures.keys.first);
+      }
+    }
   }
 
   // At most 5 verifications in any sliding second, across all sources.

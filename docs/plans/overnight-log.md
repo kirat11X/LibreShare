@@ -75,3 +75,11 @@ Total active subagents: 0 (pipeline complete).
 2026-11-06 16:10:00: READY Card A1 (Audit faulty_tcp_proxy 9/9 mutations killed, bench_lan rc=0, gate rc=0; report: docs/test-reports/inc4-a1-audit.md)
 2026-11-06 16:12:00: READY Card A2 (Spikes S4-A..D verified; JIT 83.4% SHA-256 20.6 MiB/s, AOT 81.9% SHA-256 27.4 MiB/s; appended to docs/test-reports/inc4-spikes.md)
 2026-11-06 16:22:09: READY P4-4 (Pipeline optimization, in-order running whole-file hash, single-pass chunk buffer, Sha256Provider interface for Flutter app native acceleration; proposal in docs/plans/inc4-proposals/P4-4/)
+
+2026-11-06 19:21:00: Module H (Increment 5 Groundwork) delivered: H0 spikes (S5-A..E in docs/test-reports/inc5-spikes.md), H1 tunnel_crypto (+24 passed, patch in docs/plans/inc5-proposals/h1-tunnel-crypto/), H2 share_link (+20 passed, patch in docs/plans/inc5-proposals/h2-share-link/), H3 secret_redactor (+11 passed, patch in docs/plans/inc5-proposals/h3-secret-redactor/). H DONE
+2026-11-07 00:35:00: READY Q-RESTORE (Empirical Linux SO_REUSEADDR/SO_REUSEPORT proof, POSIX non-listening PortBlocker delivered; 10/10 receive_card, 13/13 receive_mode, 7/7 startup, 13/13 p5_review pass with 0 skips; proposal in docs/plans/inc4-proposals/q-restore/)
+2026-11-07 00:48:00: READY P4-6 (Connection layer: Candidate model, CandidateKind priority ladder, HttpConnection, ConnectionManager; 21/21 passed; proposal in docs/plans/inc4-proposals/P4-6/)
+2026-11-07 00:48:15: READY P4-7 (Engine & CLI wiring: beginSendToCandidates, candidatesForDevice, CLI --candidate & --no-fallback flags; 75/75 passed; proposal in docs/plans/inc4-proposals/P4-7/)
+2026-11-07 00:48:30: READY P4-8 (Flutter app: ChannelBadge, HistoryScreen, session list audit; unit & widget tests pass; proposal in docs/plans/inc4-proposals/P4-8/)
+2026-11-07 00:48:45: READY P4-9 (Docker multi-network topology: wifi_net & lan_net, cut_wifi.sh with tc netem fault injection; proposal in docs/plans/inc4-proposals/P4-9/)
+2026-11-07 00:57:30: READY K1 (Differentiated storageUnusable failure for unwritable download directory, Settings writability probe, 4/4 mutations killed; proposal in docs/plans/inc4-proposals/K1/)

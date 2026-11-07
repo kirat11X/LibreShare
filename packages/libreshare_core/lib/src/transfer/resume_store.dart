@@ -15,6 +15,7 @@ import 'dart:io';
 
 import '../clock.dart';
 import '../model/session_models.dart';
+import '../storage/atomic_file.dart';
 import 'chunker.dart';
 
 /// Sessions are resumable for 24 hours (spec §4.4).
@@ -206,9 +207,7 @@ class ResumeStore {
     };
     final target = sidecarFile;
     await target.parent.create(recursive: true);
-    final tmp = File('${target.path}.tmp');
-    await tmp.writeAsString(jsonEncode(json), flush: true);
-    await tmp.rename(target.path);
+    await atomicWriteBytes(target, utf8.encode(jsonEncode(json)));
   }
 }
 

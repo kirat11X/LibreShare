@@ -91,3 +91,58 @@ Survivor action: the two survivors are covered by my probes (d) or equivalent (d
 - `verifier-tests/connection_cap_verifier_probes_test.dart` (formatted; imports `package:libreshare_core/src/server/capped_server_socket.dart` for X2; helpers from `test/helpers/`)
 - `verifier-tests/run-summary.txt` (stamped command log)
 - Logs: `.toolchain/scratch/e5-r4a-verify/logs/` (`mut-<id>.log`, `probes-run*.log`, `core-full.log`, `cli-full*.log`, `smoke-*.log`)
+
+---
+
+# Round 2 (re-verification of the coder's fixes; 2026-11-06 21:00-21:57)
+
+Scratch: `.toolchain/scratch/e5-r4a-verify2/` (fresh `clone` of the CURRENT real tree + `patch -p1 < patch.diff` (416 lines): rc 0, no .rej/.orig; tester file copied, byte-identical to round 1; `mut` = second copy). Real tree and `lib/` untouched; tester file untouched. Every run alone under `flock -o /tmp/libreshare-heavy.lock`, `TMPDIR=$REPO/.toolchain/tmp`. Logs: `.toolchain/scratch/e5-r4a-verify2/logs/`; stamped summary: `verifier-tests/run-summary-round2.txt`.
+
+## Round 2 verdict: SAFE AFTER FIXES (finding 1 is fixed; finding 2 is only half fixed and the other half is a real defect)
+
+- **Finding 1 (half-close bypass): FIXED.** X3 now shows 2 of 10 half-closed long-polls reach the handler with per-IP cap 2. Restoring the old read-side release (mutation `halfclose`) turns X3 red.
+- **Finding 2 (TLS handshake timeout): the slot accounting is fixed, the connection is NOT closed.** After the 10 s timeout the counter is decremented, but the TCP connection stays open (client never sees EOF; 0 of 24 stalled connections closed, X8). The cap therefore under-counts real sockets: an attacker can keep stalling handshakes at 16 per IP per timeout period and the server keeps all those fds. This is worse than round 1 for this stage (round 1 held the slot, a hard bound) although still no worse than the pre-patch tree (no cap at all). Not a plaintext, address or other regression.
+- Why (X4 answer): `SecureSocket.secureServer(socket, ...)` detaches the descriptor from the `Socket` object (`socket._detachRaw()`, SDK `secure_socket.dart:205`). After that, `socket.destroy()` and `socket.close()` are no-ops for the TCP connection. Experiment E1 (`verifier-tests/exp_detach_experiment.dart.txt`, log `exp-detach-round2.log`): destroy() or close() 1 s after `secureServer` took over, client saw close within 4 s: **false** (both); handshake future stays pending; untouched stalled handshake: no close within 12 s (E6). E5 (RawServerSocket + `RawSecureSocket.secureServer(raw)`, `raw.close()` after 1 s): client saw close: **true**. So the lib is wrong (not only the probe): both the 10 s timeout (`capped_server_socket.dart` `fail()`, the `Timer(_handshakeTimeout, fail)` path) and `destroyAll()`'s `_pending` loop call `destroy()` on the detached socket, which does nothing.
+
+## Round 2 gate table
+
+| gate | command (cwd = clone/packages/libreshare_core) | when | rc | result |
+|---|---|---|---|---|
+| patch | `patch -p1 < patch.diff` (clone root) | 21:00:47 | 0 | clean |
+| tester file x3 | `dart test -j 1 test/security/connection_cap_test.dart` | 21:07:20, 21:07:52, 21:08:20 | 0,0,0 | +12 each |
+| my probes, updated (24 tests: the 20 of round 1 with X4/X5 turned into assertions + X5b, X6, X7, X8) on the coder's patch | `dart test -j 1 -r expanded test/security/connection_cap_verifier_probes_test.dart` | 21:15:41 | 1 | +21 -3; red: X4, X5b, X8 (all "the stalled TCP connection is not closed") |
+| same, only the new/changed tests as a standalone file `connection_cap_verifier_round2_test.dart` (6 tests) | `dart test -j 1 -r expanded test/security/connection_cap_verifier_round2_test.dart` | 21:54:49 | 1 | +3 -3; red: X4, X5b, X8 |
+| experiments | `zz_exp_detach_test.dart` (E1/E5/E6), `zz_exp_gate_test.dart` (E7) | 21:08:47, 21:18:17 | 0 | E1/E6 show the no-op; E5 and E7 show what works |
+| analyze | `dart analyze --fatal-infos lib/src/server test/security/connection_cap_test.dart test/security/connection_cap_verifier_probes_test.dart test/security/connection_cap_verifier_round2_test.dart` | 21:56:19 | 0 | No issues found |
+| format | `dart format --output=none --set-exit-if-changed` on api_server.dart, capped_server_socket.dart and the three test files | 21:56:20 | 0 | 5 files, 0 changed |
+
+Full core/CLI suites skipped as instructed (the orchestrator gates).
+
+## Round 2 probe results (updated expectations)
+
+- X3 (half-close vs per-IP cap 2): PASS, 2 of 10 reach the handler.
+- X5 (default 10 s timeout): the slots are still held at 5 s and free at about 12.5 s: PASS. The probe wait was adjusted from 6 s to "check at 5 s (held) and 12.5 s (free)", and the test turned from characterisation into an assertion.
+- X6 (timeout knob 1 s: slots free within 3 s) PASS; X7 (knob 1 s does not hurt 10+1 normal HTTPS requests) PASS.
+- **X4 FAIL**, **X5b FAIL**, **X8 FAIL** (see verdict): `stop(force: true)` does not close a socket stalled in the handshake; a 1 s timeout does not close the stalled connection; of 24 stalled connections the server closed 0.
+- X4 is therefore not a probe error: with the coder's code a handshaking socket is NOT destroyed by `stop(force)`, nor by the timeout.
+
+## Round 2 mutation table (tester 12 + my 24 probes, each alone, restored, `diff -r clone mut` rc 0 each time)
+
+| mutation | red tests | verdict |
+|---|---|---|
+| `halfclose`: restore the read-side `_onClosed()` in handleDone/handleError (finding 1 fix removed) | X3 (plus the already-red X4, X5b, X8); none of the 12 tester tests | killed, by X3 only |
+| `notimeout`: handshake timer set to 1 day (finding 2 fix removed) | X5, X6 (plus X4, X5b); none of the 12 tester tests | killed, by X5/X6 only |
+| `timeoutleak`: timeout destroys but does not release the slot | P3, P4b, X5, X6 (plus X4, X5b) | killed |
+
+Note: the tester's 12 tests contain no half-close and no handshake-timeout test; the two fixes are protected only by my probe files. They should be adopted into the suite (see below).
+
+## Concrete lib fix for the open defect (validated in the scratch copy only)
+
+Diff: `verifier-tests/fix-proposal-r2-handshake-gate.diff` (95 lines against the coder's `capped_server_socket.dart`; full file `logs/capped_server_socket.with-gate-fix.dart` in the scratch dir). Idea (experiment E7: `zz_exp_gate_test.dart` passes): phase 1, while the socket is still a plain `Socket` that CAN be destroyed, wait with a timer for one whole first TLS record (5-byte header + length, at most 16640 bytes, first byte 0x16), pausing the subscription afterwards; on timeout, close, error or a non-TLS first byte, `socket.destroy()` and release the slot (a real close, E7b). Phase 2: hand the data to `SecureSocket.secureServer(socket, ctx, bufferedData: record)`; this cannot be aborted any more, so the slot stays counted until it succeeds or fails (honest accounting, bounded fds). `destroyAll()` then closes handshake-stage sockets that are still in phase 1.
+Result in `mut` with this change: tester 12 + probes 24 + round2 file 6 = **+42 all passed, rc 0** (21:53:11-21:54:49), X4 true, X5b true, X8 24 of 24 closed, X3 still 2. `dart analyze` on it had one warning only in my test file (unused `_pin`, since removed). Limit: a client that sends a complete ClientHello and then stalls before its Finished message is still not abortable in phase 2 (Dart offers no handle); it keeps its slot (bounded by the caps, never uncounted). I did not test that case. If the orchestrator prefers a smaller change: drop `release()` from the timeout path (keep the slot until the handshake future settles); that restores the round 1 bound, but then the timeout does nothing useful.
+
+## Round 2 findings
+
+1. **MEDIUM (open): handshake timeout does not close the connection** (X4, X5b, X8, E1). Fix: the gate above (validated), or at minimum do not release the slot on timeout.
+2. **LOW (open): test coverage of the two fixes lives only in my probe files.** Adopt `verifier-tests/connection_cap_verifier_probes_test.dart` (round-1 file, 20 tests, X4/X5 there are only characterisations) plus `verifier-tests/connection_cap_verifier_round2_test.dart` (6 tests: X4, X5, X5b, X6, X7, X8; X4/X5b/X8 are red until finding 1 is fixed) into `test/security/`. Note the round-2 file supersedes X4/X5 of the round-1 file: if both are adopted, delete the old X4/X5 to avoid duplicates (the old X4 only prints).
+3. **INFO: apply-notes.md says the round-1 probe file is "green with this patch"** - true for that file (its X4/X5 only print), but the round-2 file is not.

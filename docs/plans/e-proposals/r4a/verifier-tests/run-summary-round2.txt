@@ -1,0 +1,45 @@
+2026-11-06 21:01:32 WAIT r2-A
+2026-11-06 21:07:20 cap-1 start: dart test -j 1 test/security/connection_cap_test.dart
+2026-11-06 21:07:52 cap-1 rc=0 | 00:26 +12: All tests passed!
+2026-11-06 21:07:52 cap-2 start: dart test -j 1 test/security/connection_cap_test.dart
+2026-11-06 21:08:20 cap-2 rc=0 | 00:26 +12: All tests passed!
+2026-11-06 21:08:20 cap-3 start: dart test -j 1 test/security/connection_cap_test.dart
+2026-11-06 21:08:39 WAIT r2-B
+2026-11-06 21:08:47 cap-3 rc=0 | 00:26 +12: All tests passed!
+2026-11-06 21:08:47 exp-detach start: dart test -j 1 -r expanded test/security/zz_exp_detach_test.dart
+2026-11-06 21:09:09 exp-detach rc=0 | 00:21 +4: All tests passed!
+2026-11-06 21:09:09 DONE r2-A
+2026-11-06 21:09:58 WAIT r2-E
+2026-11-06 21:15:41 probes-run start: dart test -j 1 -r expanded test/security/connection_cap_verifier_probes_test.dart
+2026-11-06 21:16:29 probes-run rc=1 | For example, 'dart test --chain-stack-traces'.
+2026-11-06 21:16:29 DONE r2-B
+2026-11-06 21:18:17 exp-gate start: dart test -j 1 -r expanded test/security/zz_exp_gate_test.dart
+2026-11-06 21:18:19 exp-gate rc=0 | 00:01 +2: All tests passed!
+2026-11-06 21:18:19 DONE r2-E
+2026-11-06 21:18:42 WAIT r2-C
+2026-11-06 21:18:43 WAIT r2-D
+2026-11-06 21:31:22 mut-halfclose start: dart test -j 1 -r expanded test/security/connection_cap_test.dart test/security/connection_cap_verifier_probes_test.dart
+2026-11-06 21:32:38 mut-halfclose rc=1 | For example, 'dart test --chain-stack-traces'.
+2026-11-06 21:32:38 restore-diff after halfclose rc=0
+2026-11-06 21:32:38 mut-notimeout start: dart test -j 1 -r expanded test/security/connection_cap_test.dart test/security/connection_cap_verifier_probes_test.dart
+2026-11-06 21:33:51 mut-notimeout rc=1 | For example, 'dart test --chain-stack-traces'.
+2026-11-06 21:33:51 restore-diff after notimeout rc=0
+2026-11-06 21:33:51 mut-timeoutleak start: dart test -j 1 -r expanded test/security/connection_cap_test.dart test/security/connection_cap_verifier_probes_test.dart
+2026-11-06 21:35:09 mut-timeoutleak rc=1 | For example, 'dart test --chain-stack-traces'.
+2026-11-06 21:35:09 restore-diff after timeoutleak rc=0
+2026-11-06 21:35:09 DONE r2-C
+2026-11-06 21:35:09 analyze start: dart analyze --fatal-infos lib/src/server test/security/connection_cap_test.dart test/security/connection_cap_verifier_probes_test.dart
+2026-11-06 21:35:10 analyze rc=0 | No issues found!
+2026-11-06 21:35:10 format start: dart format --output=none --set-exit-if-changed lib/src/server/api_server.dart lib/src/server/capped_server_socket.dart test/security/connection_cap_test.dart test/security/connection_cap_verifier_probes_test.dart
+2026-11-06 21:35:10 format rc=0 | Formatted 4 files (0 changed) in 0.05 seconds.
+2026-11-06 21:35:10 DONE r2-D
+2026-11-06 21:35:58 WAIT r2-F
+2026-11-06 21:35:59 WAIT r2-G
+2026-11-06 21:53:11 fix-run start: dart test -j 1 -r expanded test/security/connection_cap_test.dart test/security/connection_cap_verifier_probes_test.dart test/security/connection_cap_verifier_round2_test.dart
+2026-11-06 21:54:49 fix-run rc=0 | 01:36 +42: All tests passed!
+2026-11-06 21:54:49 round2-file-on-patch start: dart test -j 1 -r expanded test/security/connection_cap_verifier_round2_test.dart
+2026-11-06 21:55:27 round2-file-on-patch rc=1 | For example, 'dart test --chain-stack-traces'.
+2026-11-06 21:55:27 DONE r2-F
+2026-11-06 21:55:27 fix-analyze start: dart analyze --fatal-infos lib/src/server test/security/connection_cap_verifier_round2_test.dart
+2026-11-06 21:55:28 fix-analyze rc=2 | 1 issue found.
+2026-11-06 21:55:28 DONE r2-G

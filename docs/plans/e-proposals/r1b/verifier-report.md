@@ -77,3 +77,80 @@ Round-1 findings: F1 fixed (EXDEV/ENOSPC no longer move the target; V2-F1-18/-28
 
 ## 6. Files
 `docs/plans/e-proposals/r1b/verifier-tests/`: `atomic_file_verifier_probes_test.dart` (20 tests, all green; P2a/P3a/P3b updated), `atomic_file_verifier_mutation_test.dart` (5, green), `atomic_file_verifier_v2_test.dart` (20; 2 intentionally red until R2-F1 is fixed), `mutation-results.txt`. All three are verifier tests (not tester, not coder). Logs: `.toolchain/tmp/verif2_*.log`; scripts `.toolchain/tmp/verif2_*.sh`.
+
+---
+
+# Round 3 (verifier, 2026-11-06 20:59-21:17 by `date`)
+
+Subject: the regenerated `patch.diff` (20:46) of the R2-F1 fix. Fresh clone of the current real tree: `.toolchain/scratch/e5-r1b-verify3/clone`. Real tree and tester files untouched.
+
+## Verdict: SAFE AFTER FIXES - the code is SAFE, the DELIVERED `patch.diff` is UNSAFE (one blocking finding, R3-F1)
+
+### R3-F1 (BLOCKER, delivery): `patch.diff` is polluted with unrelated reverse changes
+The regenerated `patch.diff` has 21 file sections (136 KB) instead of 5. It was made with `diff -ruN` between the CURRENT real tree and the coder's OLDER clone, so every file in which the real tree moved on appears as a change to be undone. Measured in a copy of the current real tree:
+- `patch -p1 --dry-run < patch.diff` rc=0 and `patch -p1 < patch.diff` rc=0 (no warning!), after which `packages/libreshare_core/lib/src/connection/` and `.../monitor/` DO NOT EXIST any more (`ls` rc=2 for both).
+- It deletes or rewrites: `libreshare_core.dart` (drops 11 barrel exports), `connection/{candidate,connection,connection_manager,http_connection}.dart`, `monitor/{channel_event,event_log,event_record}.dart`, `storage/{session_record,session_store}.dart`, `transfer/{idle_timeout_manager,receiver_adoption_helper}.dart`, `engine/libreshare_engine.dart`, `model/events.dart`, `transfer/{file_sender,hashing}.dart`; and inside `file_receiver.dart` it also removes the running-hash optimisation (`runningHasher`, `nextExpectedChunkIndex`, ... 6 hunks) next to the 3 real R1b hunks.
+Applying it would silently destroy increments 4 and 5 of the real tree. NOT to be applied.
+Fix: regenerate against the current real tree restricted to the 5 R1b files, and in `file_receiver.dart` keep only the 3 R1b hunks (import + two `atomicReplace` lines). I produced exactly that as `docs/plans/e-proposals/r1b/verifier-patch-r1b-only.diff` (5 sections, 326 lines): `patch -p1 --dry-run` rc=0, `patch -p1` rc=0 on the fresh clone, and `diff -rq` of the clone's `lib/` against the real tree lists exactly the 5 R1b files (+ new `atomic_file.dart`); the `file_receiver.dart` delta is exactly 3 lines. All results below are for this clean patch (the lib content of `atomic_file.dart`, `file_secret_store`, `receive_settings_store`, `resume_store` is identical to the coder's sections of `patch.diff`, extracted by header). The orchestrator may use my file or regenerate; either way check `grep -c '^--- ' patch.diff` = 5 and `patch --dry-run` on the real tree.
+
+### Gates (clone = real tree + clean patch; every run under `flock -o /tmp/libreshare-heavy.lock`, TMPDIR=.toolchain/tmp)
+| Gate | Result | rc |
+|---|---|---|
+| clean patch apply | 5 files | 0 |
+| `atomic_file_verifier_v3_test.dart` (new, 15 tests, 21:11:47) | `+15 All tests passed` | 0 |
+| five+v3 files (tester 2 = 32, probes 20, mutation 5, v2 20, v3 15) x3 (21:11:48-21:12:03) | `+92 All tests passed` x3 | 0, 0, 0 |
+| `dart analyze --fatal-infos` clone root (incl. all test files) | No issues found | 0 |
+| `dart format --output=none --set-exit-if-changed` on the 5 lib files + 6 atomic test files + hooks | 12 files, 0 changed | 0 |
+Full suites skipped as instructed. Confirmed GREEN now (coder's claim correct): P2a, P3a, P3b, `V2-receiver-user-bak`, `V2-receiver-user-bak-windows`, and all 4 former FINDING tests; the whole v2 file is green (20/20).
+(One earlier five-file run, +77 at 21:07, was made while my clone temporarily held the polluted file_receiver and is NOT counted.)
+
+### Mutation table (copy `mut/`, one at a time, restored, `diff -r` clone vs mut rc=0 in all 29 runs, no "MUTATION NOT APPLIED"; raw `verifier-tests/mutation-results-round3.txt`; baseline +92 all green)
+Reds = tests newly red out of the 92 (tester files / verifier files).
+| # | Mutation | Reds | Killed by |
+|---|---|---|---|
+| a | no move-aside fallback | 24 | tester 6 + many |
+| b | delete the old target first | 18 | tester 6 (never-delete, cleanup) + ours |
+| c | no restore after failed commit | 3 | V-restore x2, V2-first-error (tester: 0) |
+| d | tmp not removed on failure | 18 | tester 8 + ours |
+| e | stale tmp not removed | 1 | V-stale-tmp-readonly (tester: 0) |
+| f | no per-target queue | 4 | tester no-torn-reads + P4 + V2-queue-key |
+| g | mode after bytes | 2 | V-mode-before-bytes, P6 (tester: 0) |
+| h1 | own `.lsbak` backup NOT deleted after commit | 18 | tester 6 + ours incl. V3-user-bak/backup-name |
+| h2 | fixed `.bak` not removed after plain commit (store path) | 1 | V2-bak-removed-after-plain-success (tester: 0) |
+| i / i2 | receiver renames back to plain `rename` | 4 / 1 | adoption uses-helper / V-receiver-copy-fallback (i2: tester 0) |
+| j | errno filter removed | 6 | P1b, V2-F1-18/-28, V3-errno-30/-122, V3-other-filesystem (tester: 0) |
+| k | errors without osError skip the fallback | 1 | V2-F1-noerrno only (tester: 0) |
+| l | stale-bak removal (store path) skipped | 1 | V2-stale-bak-removed (tester: 0) |
+| n | symlink-at-tmp deletion removed | 3 | P2a, P2b, V2-dangling-symlink |
+| o | queue key not normalised | 2 | P4b, V2-queue-key-dotdot |
+| p | recover restores although target exists | 1 | V2-recover-keeps-existing-target |
+| q / r | `rethrow` instead of the FIRST error (move-aside / commit path) | 1 / 2 | V2-first-error-moveaside / V2-first-error, V3-double-failure |
+| **s** | atomicReplace backup is the fixed `<t>.bak` again (user file clobbered) | 4 | V3-user-bak-windows, V3-backup-name, V3-double-failure, V3-crash-window (V2-receiver-user-bak* stay green because the plain rename needs no backup; tester: 0) |
+| **t** | atomicReplace deletes `<t>.bak` after commit again (the R2-F1 bug) | 3 | V2-receiver-user-bak, -windows, V3-user-bak-plain (tester: 0) |
+| **u** | atomicReplace uses `fixedBak: true` | 7 | V2 x2, V3 x5 |
+| **v** | atomicWriteBytes uses `fixedBak: false` (store path loses `.bak` rules) | 7 | probes x2, V2 x4, V3-fixed-in-write |
+| **w** | unique-name free-check removed | 0 | SURVIVES: equivalent mutant in practice (a 32-bit random collision with an existing entry; cannot be provoked without a seam for the RNG) |
+| **x / y / z** | errno 30 / 122 / 28 dropped from the no-fallback list | 1 / 1 / 1 | V3-errno-30 / V3-errno-122 / V2-F1-28 |
+| **aa** | EIO(5) added to the no-fallback list | 22 | tester 6 (Windows-like simulations) + ours |
+The only survivor is w (equivalent). Survivors of the TESTER's two files alone: c, e, g, h2, i2, j, k, l, n, o, p, q, r, s, t, u, v, x, y, z - all covered by the verifier files, so the verifier files must travel with the patch.
+
+### Attempts to break the new code (all in `atomic_file_verifier_v3_test.dart`, 15 tests green)
+- **User files untouched** (the R2-F1 scenario): user `<t>.bak` survives a Windows-like replace and a plain replace; a user `<t>.lsbak-deadbeef` survives too; during the window the old bytes are in exactly one `<t>.lsbak-<hex>` (never `.bak`), gone after the commit.
+- **Crash between move-aside and commit** (rename hangs forever): target absent, old bytes in exactly one `.lsbak-<hex>`, new bytes in `.tmp`; `recoverAtomicBackup` returns false (it only knows the fixed `.bak`). Same for a double failure (old bytes in one `.lsbak-<hex>`, error = the FIRST). Consequence: on the receiver path a crash in the window leaves a recoverable-by-hand `lsbak` file nobody looks for (LOW; in practice the receiver only reaches the move-aside in a race, since it picks a free name for an existing target).
+- **Backup name collision**: the free-check is the only guard (mutant w): a name taken after the check would be overwritten only on a filesystem that allows rename-over, i.e. never in the situation where the fallback runs (Windows refuses). Not exploitable.
+- **Real other filesystem** (`/dev/shm` -> temp dir, different devices): `atomicReplace` throws errno 18 after exactly ONE rename attempt, target never missing, old bytes intact, tmp intact.
+- **Symlink target**: `atomicWriteBytes` replaces the link with a regular file, the linked file is untouched (same as the pre-patch rename); with a Windows-like refusal a link is not a regular file, so no move-aside happens: error, link and real file intact.
+- **Read-only directory**: `atomicWriteBytes` throws `FileSystemException`, old target intact, no litter; `atomicReplace` with tmp+target present throws, BOTH files intact, no backup.
+- **Concurrent replace of one target** (6 unqueued `atomicReplace`, Windows-like refusal): 1 succeeds, 5 throw `FileSystemException` (they see the target momentarily moved aside and refuse), the target is always one whole payload, no backup litter, the failed callers' tmp files keep their bytes. No corruption; only the receiver uses this path and it never targets one name twice. (Writers via `atomicWriteBytes` are queued: no-torn-reads test.)
+- Errno list verified: 18, 28, 30, 122 -> exactly one rename, never a missing target; 5 and 13 still fall back (the tester's simulations rely on 5).
+
+### Remaining findings
+| # | Sev | Finding | Suggested fix |
+|---|---|---|---|
+| R3-F1 | BLOCKER | `patch.diff` reverts increments 4/5 (see above). | Replace with `verifier-patch-r1b-only.diff` or regenerate (5 sections, `file_receiver.dart` 3 hunks), re-run `patch --dry-run` on the real tree at apply time. |
+| R2-F2 | MEDIUM, known limit (Windows only) | `recoverAtomicBackup` not wired into the stores; the fixed `.bak` can be stranded and is removed by the next successful write; the receiver-path `.lsbak-<hex>` is not recoverable by it at all. | Wire it in a follow-up (store `load()` / start of `atomicWriteBytes` under the queue); documented in apply-notes. |
+| R3-F2 | LOW | Unqueued concurrent `atomicReplace` of one target fails 5 of 6 (safe, no data loss). | None needed for the receiver; document. |
+| R3-F3 | LOW | `throw first` loses the original stack trace; queue key not canonical for symlinked dirs / Windows case; POSIX negative list still lets unknown errnos run the move-aside. | Optional. |
+
+### Which test files must be applied with the patch
+Into `packages/libreshare_core/test/unit/`: `atomic_file_test.dart`, `atomic_file_adoption_test.dart` (tester), and ALL FOUR verifier files from `docs/plans/e-proposals/r1b/verifier-tests/`: `atomic_file_verifier_probes_test.dart` (20), `atomic_file_verifier_mutation_test.dart` (5), `atomic_file_verifier_v2_test.dart` (20), `atomic_file_verifier_v3_test.dart` (15); into `test/helpers/`: `atomic_hooks.dart`. Together +92, all green with the clean patch. The verifier files are verifier-written (not tester/coder). `mutation-results-round3.txt` is evidence only.

@@ -1,7 +1,15 @@
-diff -ruN packages/libreshare_core/lib/src/engine/libreshare_engine.dart .toolchain/scratch/e5-r4c/clone/packages/libreshare_core/lib/src/engine/libreshare_engine.dart
---- a/packages/libreshare_core/lib/src/engine/libreshare_engine.dart	2026-11-05 19:51:04.210821302 +0530
-+++ b/packages/libreshare_core/lib/src/engine/libreshare_engine.dart	2026-11-06 12:13:16.087901863 +0530
-@@ -198,6 +198,7 @@
+diff -ruN a/packages/libreshare_core/lib/src/engine/libreshare_engine.dart b/packages/libreshare_core/lib/src/engine/libreshare_engine.dart
+--- a/packages/libreshare_core/lib/src/engine/libreshare_engine.dart
++++ b/packages/libreshare_core/lib/src/engine/libreshare_engine.dart
+@@ -20,6 +20,7 @@
+ import 'dart:typed_data';
+ 
+ import 'package:logging/logging.dart';
++import 'package:meta/meta.dart';
+ 
+ import '../client/api_client.dart';
+ import '../clock.dart';
+@@ -198,6 +199,7 @@
    StreamSubscription<DiscoveryEvent>? _certWatch;
    StreamSubscription<void>? _trustWatch;
    final Set<String> _greeted = {};
@@ -9,7 +17,7 @@ diff -ruN packages/libreshare_core/lib/src/engine/libreshare_engine.dart .toolch
    final Set<String> _learning = {};
    Future<void> _mdnsTail = Future<void>.value();
    int? _mdnsPort;
-@@ -524,6 +525,10 @@
+@@ -524,6 +526,10 @@
      await _trustWatch?.cancel();
      _trustWatch = null;
      _greeted.clear();
@@ -20,7 +28,7 @@ diff -ruN packages/libreshare_core/lib/src/engine/libreshare_engine.dart .toolch
      _registry.stop();
      await _stopMdns();
      final multicast = _multicast;
-@@ -1058,13 +1063,69 @@
+@@ -1058,13 +1064,82 @@
        final t = trust.classifyFingerprint(fp).trust;
        final contact = t == PeerTrust.known || t == PeerTrust.trusted;
        if (contact && _greeted.add(fp)) {
@@ -33,6 +41,19 @@ diff -ruN packages/libreshare_core/lib/src/engine/libreshare_engine.dart .toolch
      }
    }
  
++  /// Number of greeting retry timers currently pending (E5 R4c). For tests.
++  @visibleForTesting
++  int get greetingRetryPendingCount => _greetRetry.length;
++
++  /// How many pending greeting retry timers are still active. For tests.
++  @visibleForTesting
++  int get greetingRetryActiveTimerCount =>
++      _greetRetry.values.where((t) => t.isActive).length;
++
++  /// Fingerprints of the contacts greeted so far (read-only copy). For tests.
++  @visibleForTesting
++  Set<String> get greetedFingerprints => Set.unmodifiable(_greeted);
++
 +  /// Back-off between greeting retries (about 40 s in 16 tries; the first
 +  /// eight cover 4 s at 0.5 s steps, because a contact usually pins us within
 +  /// seconds).

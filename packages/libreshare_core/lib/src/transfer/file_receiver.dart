@@ -37,6 +37,7 @@ import '../model/session_models.dart';
 import '../model/transfer_status.dart';
 import '../protocol.dart';
 import '../server/incoming_transfer_handler.dart';
+import '../storage/atomic_file.dart';
 import 'chunker.dart';
 import 'filename_sanitizer.dart';
 import 'resume_store.dart';
@@ -942,7 +943,7 @@ class FileReceiver implements SecureTransferHandler {
       await f.target.parent.create(recursive: true);
     }
     try {
-      await f.partial.rename(f.target.path);
+      await atomicReplace(f.partial, f.target);
     } on FileSystemException {
       if (partialDir == null) rethrow;
       // Different file system: copy next to the target, then rename.
@@ -951,7 +952,7 @@ class FileReceiver implements SecureTransferHandler {
       );
       try {
         await f.partial.copy(tmp.path);
-        await tmp.rename(f.target.path);
+        await atomicReplace(tmp, f.target);
       } catch (_) {
         _deleteQuietly(tmp);
         rethrow;

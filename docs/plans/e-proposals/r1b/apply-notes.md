@@ -11,3 +11,7 @@
 - Apply with the patch: tester files (atomic_file_test, atomic_file_adoption_test, atomic_hooks) and verifier-tests/atomic_file_verifier_mutation_test.dart (5 tests, green).
 - verifier-tests/atomic_file_verifier_probes_test.dart: its 4 FINDING tests are green, but P2a, P3a, P3b are red because they pin the old behaviour (symlink write-through, `.bak-<hex>` name). Apply it ONLY after those three are updated by their owner; until then leave it out.
 - Follow-up: wire `recoverAtomicBackup(target)` into the stores' startup/load (credential_store, device_registry, file_secret_store, receive_settings, resume sidecar) and app_settings_store; not in this patch.
+
+## Round 3
+- Apply with the patch: the 3 tester files and all three verifier files (atomic_file_verifier_probes_test, _mutation_test, _v2_test) into test/unit/ (atomic_hooks.dart into test/helpers/); all green (+77 on the five atomic files).
+- Known limit / follow-up (R2-F2, Windows only): recoverAtomicBackup is not wired into the stores' startup.

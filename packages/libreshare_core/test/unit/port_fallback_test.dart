@@ -6,10 +6,11 @@ import 'package:libreshare_core/libreshare_core.dart';
 import 'package:test/test.dart';
 
 import '../helpers/api_fake_handler.dart';
+import '../helpers/port_blocker.dart';
 
 void main() {
   late FakeIncomingHandler fake;
-  final blockers = <ServerSocket>[];
+  final blockers = <dynamic>[];
   final servers = <ApiServer>[];
 
   setUp(() => fake = FakeIncomingHandler());
@@ -41,8 +42,8 @@ void main() {
     return s;
   }
 
-  Future<ServerSocket> occupy(int port) async {
-    final s = await ServerSocket.bind(InternetAddress.anyIPv4, port);
+  dynamic occupy(int port) {
+    final s = PortBlocker.bind(port, address: '0.0.0.0');
     blockers.add(s);
     return s;
   }
@@ -50,25 +51,8 @@ void main() {
   /// A base port P such that P..P+[count]-1 can all be bound right now, found
   /// by probing, so the test never depends on fixed ports being free.
   Future<int> findFreeRun(int count) async {
-    for (var attempt = 0; attempt < 50; attempt++) {
-      final probe = await ServerSocket.bind(InternetAddress.anyIPv4, 0);
-      final base = probe.port;
-      await probe.close();
-      if (base + count >= 65000) continue;
-      final taken = <ServerSocket>[];
-      try {
-        for (var i = 0; i < count; i++) {
-          taken.add(await ServerSocket.bind(InternetAddress.anyIPv4, base + i));
-        }
-        return base;
-      } on SocketException {
-        // some port in the run is busy: try another base
-      } finally {
-        for (final t in taken) {
-          await t.close();
-        }
-      }
-    }
+    final base = PortBlocker.findFreeRun(count, address: '0.0.0.0');
+    if (base != null) return base;
     fail('could not find $count consecutive free ports');
   }
 
