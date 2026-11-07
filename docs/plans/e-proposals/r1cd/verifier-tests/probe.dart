@@ -75,6 +75,8 @@ void main() {
   for (final c in cases) {
     final w = isPathWithin(c[0], c[1], windows: true);
     final raw = p.windows.isWithin(c[0], c[1]);
-    print('${w ? "WITHIN " : "outside"} (rawWinStyle=$raw)  root=${c[0]}  cand=${c[1]}');
+    print(
+      '${w ? "WITHIN " : "outside"} (rawWinStyle=$raw)  root=${c[0]}  cand=${c[1]}',
+    );
   }
 }
