@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://libreshare.org/schemas/ble-hotspot.schema.json",
+  "title": "BleHotspot",
+  "description": "LS-BLE/1 Encrypted hotspot credentials and connection endpoints.",
+  "type": "object",
+  "required": ["type", "offerId", "ssid", "psk", "hostIp", "port", "certFp", "validUntil"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "hotspot"
+    },
+    "offerId": {
+      "type": "string"
+    },
+    "ssid": {
+      "type": "string"
+    },
+    "psk": {
+      "type": "string"
+    },
+    "band": {
+      "type": "integer"
+    },
+    "hostIp": {
+      "type": "string"
+    },
+    "port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "certFp": {
+      "type": "string"
+    },
+    "validUntil": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "additionalProperties": false
+}

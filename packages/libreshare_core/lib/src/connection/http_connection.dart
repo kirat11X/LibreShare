@@ -36,9 +36,15 @@ class HttpConnection implements Connection {
   @override
   Future<PeerClient> open({Duration? timeout}) async {
     _state = ConnectionState.connecting;
-    final effectiveTimeout = timeout ?? const Duration(seconds: 3);
+    final effectiveTimeout = timeout ?? candidate.connectBudget;
 
     try {
+      if (candidate.setupBudget > Duration.zero) {
+        await candidate.setup().timeout(candidate.setupBudget);
+      } else {
+        await candidate.setup();
+      }
+
       final client = clientFactory != null
           ? clientFactory!(candidate, security)
           : ApiClient(
@@ -90,6 +96,7 @@ class HttpConnection implements Connection {
       return client;
     } catch (e) {
       _state = ConnectionState.failed;
+      await candidate.teardown();
       rethrow;
     }
   }
@@ -99,5 +106,6 @@ class HttpConnection implements Connection {
     _state = ConnectionState.closed;
     _client?.close();
     _client = null;
+    await candidate.teardown();
   }
 }

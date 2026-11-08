@@ -25,6 +25,11 @@ class ChannelBadge extends StatelessWidget {
       CandidateKind.loopback => (Icons.loop, 'Loopback', colorScheme.tertiary),
       CandidateKind.manual => (Icons.tune, 'Manual', colorScheme.outline),
       CandidateKind.tunnel => (Icons.cloud, 'Tunnel', colorScheme.error),
+      CandidateKind.hotspot => (
+        Icons.wifi_tethering,
+        'Hotspot',
+        colorScheme.secondary,
+      ),
     };
 
     if (isFallingBack) {

@@ -1,0 +1,100 @@
+--- a/packages/libreshare_core/lib/src/engine/libreshare_engine.dart
++++ b/packages/libreshare_core/lib/src/engine/libreshare_engine.dart
+@@ -65,6 +65,11 @@
+ import 'outgoing_send.dart';
+ import 'security_wiring.dart';
+ 
++/// Default of the `chunkConcurrency` parameters of the send methods: the count
++/// comes from the engine's [LibreShareEngine.speedMode]. Any other value is used
++/// as given (an explicit 0 is therefore the speed mode's count, not an error).
++const int kChunkConcurrencyFromProfile = 0;
++
+ class LibreShareEngine implements ReceiveGate {
+   LibreShareEngine({
+     required this.self,
+@@ -789,7 +794,7 @@
+     required String host,
+     required int port,
+     String? pin,
+-    int? chunkConcurrency,
++    int chunkConcurrency = kChunkConcurrencyFromProfile,
+     Duration acceptTimeout = kPermissionTimeout,
+   }) async => beginSendFiles(
+     files,
+@@ -809,7 +814,7 @@
+     DiscoveredDevice device,
+     List<File> files, {
+     String? pin,
+-    int? chunkConcurrency,
++    int chunkConcurrency = kChunkConcurrencyFromProfile,
+     Duration acceptTimeout = kPermissionTimeout,
+     Duration probeTimeout = const Duration(milliseconds: 1500),
+   }) async => beginSendTo(
+@@ -833,7 +838,7 @@
+     required String host,
+     required int port,
+     String? pin,
+-    int? chunkConcurrency,
++    int chunkConcurrency = kChunkConcurrencyFromProfile,
+     Duration acceptTimeout = kPermissionTimeout,
+   }) => _beginSend(
+     files,
+@@ -851,7 +856,7 @@
+     DiscoveredDevice device,
+     List<File> files, {
+     String? pin,
+-    int? chunkConcurrency,
++    int chunkConcurrency = kChunkConcurrencyFromProfile,
+     Duration acceptTimeout = kPermissionTimeout,
+     Duration probeTimeout = const Duration(milliseconds: 1500),
+   }) => beginSendToCandidates(
+@@ -868,7 +873,7 @@
+     DiscoveredDevice device,
+     List<File> files, {
+     String? pin,
+-    int? chunkConcurrency,
++    int chunkConcurrency = kChunkConcurrencyFromProfile,
+     Duration acceptTimeout = kPermissionTimeout,
+     Duration probeTimeout = const Duration(milliseconds: 1500),
+     List<Candidate>? candidates,
+@@ -891,12 +896,13 @@
+     List<File> files, {
+     required FindEndpoint find,
+     required String? pin,
+-    required int? chunkConcurrency,
++    required int chunkConcurrency,
+     required Duration acceptTimeout,
+   }) {
+-    // Null means the speed mode decides; an explicit count always wins.
+-    final concurrency =
+-        chunkConcurrency ?? speedProfileFor(speedMode).chunkConcurrency;
++    // The sentinel means the speed mode decides; any other count is used as given.
++    final concurrency = chunkConcurrency == kChunkConcurrencyFromProfile
++        ? speedProfileFor(speedMode).chunkConcurrency
++        : chunkConcurrency;
+     if (!_secure) {
+       return OutgoingSend.start(
+         files: files,
+--- a/packages/libreshare_cli/lib/ls_cli.dart
++++ b/packages/libreshare_cli/lib/ls_cli.dart
+@@ -1022,10 +1022,17 @@
+       return 64;
+     }
+   }
++  // Absent means the speed mode's count; a bad value is a usage error.
++  var concurrency = kChunkConcurrencyFromProfile;
+   final concurrencyArg = r['concurrency'] as String?;
+-  final concurrency = concurrencyArg == null
+-      ? null
+-      : int.tryParse(concurrencyArg);
++  if (concurrencyArg != null) {
++    final n = int.tryParse(concurrencyArg);
++    if (n == null || n < 1) {
++      io.err('send: --concurrency must be a whole number, 1 or more');
++      return 64;
++    }
++    concurrency = n;
++  }
+   final timeout = int.tryParse(r['timeout'] as String) ?? 120;
+   final findTimeout = _parseSeconds(r['find-timeout'] as String?);
+   if (deviceArg != null && findTimeout == null) {

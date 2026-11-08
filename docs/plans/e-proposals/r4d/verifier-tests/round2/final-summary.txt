@@ -1,0 +1,14 @@
+rsync rc=0
+pubget rc=0
+patch rc=0 sections=1
+cmp patched==round2-clone rc=0
+[peer_registry_cert_cache_test] start 2026-11-07 15:09:56
+[peer_registry_cert_cache_test] end 2026-11-07 15:11:56 rc=0 01:54 +7: All tests passed!
+[peer_registry_cert_cache_verifier_p6_test] start 2026-11-07 15:11:56
+[peer_registry_cert_cache_verifier_p6_test] end 2026-11-07 15:12:01 rc=0 00:03 +1: All tests passed!
+[peer_registry_cert_cache_verifier_r2_test] start 2026-11-07 15:12:01
+[peer_registry_cert_cache_verifier_r2_test] end 2026-11-07 15:12:11 rc=0 00:08 +10: All tests passed!
+[analyze root] 2026-11-07 15:12:11
+analyze rc=1 1 issue found.
+format rc=0
+FINALDONE

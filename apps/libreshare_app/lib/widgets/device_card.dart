@@ -15,6 +15,7 @@ String sourceLabel(DiscoverySource source) => switch (source) {
   DiscoverySource.manual => tr('source.manual'),
   DiscoverySource.qr => tr('source.qr'),
   DiscoverySource.register => tr('source.register'),
+  DiscoverySource.ble => tr('source.ble'),
 };
 
 /// `ip:port`, with brackets around IPv6 literals.

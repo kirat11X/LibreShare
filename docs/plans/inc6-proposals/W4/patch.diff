@@ -1,0 +1,505 @@
+diff --git a/packages/libreshare_core/lib/libreshare_core.dart b/packages/libreshare_core/lib/libreshare_core.dart
+index 9316c51..5a1b9bb 100644
+--- a/packages/libreshare_core/lib/libreshare_core.dart
++++ b/packages/libreshare_core/lib/libreshare_core.dart
+@@ -122,3 +122,5 @@ export 'src/rendezvous/bip340.dart';
+ export 'src/rendezvous/nip01.dart';
+ export 'src/rendezvous/loopback_nostr_relay.dart';
+ export 'src/rendezvous/nostr_backend.dart';
++export 'src/rendezvous/presence_cache.dart';
++export 'src/rendezvous/rendezvous_service_impl.dart';
+diff --git a/packages/libreshare_core/lib/src/rendezvous/in_memory_relay.dart b/packages/libreshare_core/lib/src/rendezvous/in_memory_relay.dart
+index 0568120..6b5640c 100644
+--- a/packages/libreshare_core/lib/src/rendezvous/in_memory_relay.dart
++++ b/packages/libreshare_core/lib/src/rendezvous/in_memory_relay.dart
+@@ -18,6 +18,10 @@ class InMemoryRelay implements RendezvousBackend {
+ 
+   final Set<String> _subscriptions = {};
+   bool _isConnected = false;
++  int _publishedCount = 0;
++
++  /// Total number of published events processed.
++  int get publishedCount => _publishedCount;
+ 
+   /// Optional hook to simulate network delays.
+   Duration? latency;
+@@ -68,6 +72,8 @@ class InMemoryRelay implements RendezvousBackend {
+       throw StateError('Cannot publish when relay is disconnected');
+     }
+ 
++    _publishedCount++;
++
+     final chan = event.channelIdHex.toLowerCase();
+     if (droppedChannels.contains(chan)) {
+       // Intentionally drop event for fault testing
+diff --git a/packages/libreshare_core/lib/src/rendezvous/presence_cache.dart b/packages/libreshare_core/lib/src/rendezvous/presence_cache.dart
+new file mode 100644
+index 0000000..04e627a
+--- /dev/null
++++ b/packages/libreshare_core/lib/src/rendezvous/presence_cache.dart
+@@ -0,0 +1,115 @@
++// PresenceCache tracking peer presence, freshness TTL, and active candidates.
++library;
++
++import 'dart:async';
++
++import '../clock.dart';
++import '../connection/candidate.dart';
++import 'records.dart';
++import 'rendezvous_candidate_source.dart';
++
++/// Information about a paired peer's online presence and reachable candidates.
++class PeerPresence {
++  const PeerPresence({
++    required this.peerDeviceId,
++    required this.lastSeen,
++    required this.isOnline,
++    required this.record,
++    required this.candidates,
++  });
++
++  final String peerDeviceId;
++  final DateTime lastSeen;
++  final bool isOnline;
++  final PresenceRecord record;
++  final List<Candidate> candidates;
++}
++
++/// Cache storing presence information for paired peers.
++class PresenceCache {
++  PresenceCache({
++    this.ttl = const Duration(minutes: 5),
++    this.clock = const SystemClock(),
++    this.candidateSource = const RendezvousCandidateSource(),
++  });
++
++  final Duration ttl;
++  final Clock clock;
++  final RendezvousCandidateSource candidateSource;
++
++  final Map<String, PeerPresence> _cache = {};
++  final StreamController<PeerPresence> _updatesCtrl =
++      StreamController<PeerPresence>.broadcast();
++
++  /// Stream of presence updates as peers announce or change status.
++  Stream<PeerPresence> get updates => _updatesCtrl.stream;
++
++  /// Updates or records presence for [peerDeviceId].
++  void recordPresence(
++    String peerDeviceId,
++    PresenceRecord record, {
++    String peerFingerprint = '',
++  }) {
++    final now = clock.now();
++    final candidates = candidateSource.candidatesFromPresence(
++      presence: record,
++      peerFingerprint: peerFingerprint,
++    );
++
++    final presence = PeerPresence(
++      peerDeviceId: peerDeviceId,
++      lastSeen: now,
++      isOnline: true,
++      record: record,
++      candidates: candidates,
++    );
++
++    _cache[peerDeviceId] = presence;
++    _updatesCtrl.add(presence);
++  }
++
++  /// Returns current presence for [peerDeviceId], or null if unknown or expired.
++  PeerPresence? get(String peerDeviceId) {
++    final entry = _cache[peerDeviceId];
++    if (entry == null) return null;
++    if (clock.now().difference(entry.lastSeen) > ttl) {
++      _cache.remove(peerDeviceId);
++      return null;
++    }
++    return entry;
++  }
++
++  /// Whether [peerDeviceId] is currently considered online.
++  bool isOnline(String peerDeviceId) => get(peerDeviceId) != null;
++
++  /// Returns list of all peers currently online within TTL.
++  List<PeerPresence> get onlinePeers {
++    final now = clock.now();
++    final result = <PeerPresence>[];
++    final expiredKeys = <String>[];
++
++    for (final entry in _cache.entries) {
++      if (now.difference(entry.value.lastSeen) <= ttl) {
++        result.add(entry.value);
++      } else {
++        expiredKeys.add(entry.key);
++      }
++    }
++
++    for (final k in expiredKeys) {
++      _cache.remove(k);
++    }
++
++    return result;
++  }
++
++  /// Manually evicts a peer (e.g. on unpair/revoke).
++  void evict(String peerDeviceId) {
++    _cache.remove(peerDeviceId);
++  }
++
++  /// Disposes resources.
++  Future<void> dispose() async {
++    await _updatesCtrl.close();
++  }
++}
+diff --git a/packages/libreshare_core/lib/src/rendezvous/rendezvous_service_impl.dart b/packages/libreshare_core/lib/src/rendezvous/rendezvous_service_impl.dart
+new file mode 100644
+index 0000000..6ec6530
+--- /dev/null
++++ b/packages/libreshare_core/lib/src/rendezvous/rendezvous_service_impl.dart
+@@ -0,0 +1,344 @@
++// RendezvousServiceImpl: coordinates presence announcements, cache, offers, and receive gate hook.
++library;
++
++import 'dart:async';
++
++import '../clock.dart';
++import '../model/ls_exception.dart';
++import '../receive/receive_state.dart';
++import '../security/contracts.dart';
++import '../security/crypto_primitives.dart' show hexOf, sha256Bytes;
++import 'channel_deriver.dart';
++import 'envelope_codec.dart';
++import 'presence_cache.dart';
++import 'records.dart';
++import 'rendezvous_backend.dart';
++import 'rendezvous_service.dart';
++import 'replay_guard.dart';
++
++/// Implementation of [RendezvousService] using encrypted rendezvous channels.
++class RendezvousServiceImpl implements RendezvousService {
++  RendezvousServiceImpl({
++    required this.identity,
++    required this.trust,
++    required this.secrets,
++    required this.backend,
++    this.channelDeriver = const ChannelDeriverImpl(),
++    this.envelopeCodec = const EnvelopeCodecImpl(),
++    ReplayGuard? replayGuard,
++    PresenceCache? presenceCache,
++    this.clock = const SystemClock(),
++    this.announcePolicy = AnnouncePolicy.none,
++    List<Map<String, dynamic>>? localCandidates,
++  }) : replayGuard = replayGuard ?? ReplayGuard(),
++       presenceCache = presenceCache ?? PresenceCache(clock: clock),
++       localCandidates = localCandidates ?? [];
++
++  final IdentityProvider identity;
++  final TrustStore trust;
++  final SecretStore secrets;
++  final RendezvousBackend backend;
++  final ChannelDeriver channelDeriver;
++  final EnvelopeCodec envelopeCodec;
++  final ReplayGuard replayGuard;
++  final PresenceCache presenceCache;
++  final Clock clock;
++
++  AnnouncePolicy announcePolicy;
++  List<Map<String, dynamic>> localCandidates;
++
++  int _seq = 0;
++  StreamSubscription<RelayEvent>? _backendSub;
++  Timer? _periodicTimer;
++  OfferCallback? _onOffer;
++
++  final StreamController<MapEntry<String, PresenceRecord>> _presenceCtrl =
++      StreamController<MapEntry<String, PresenceRecord>>.broadcast();
++
++  final Map<String, Completer<ReplyRecord>> _pendingOffers = {};
++
++  @override
++  Stream<MapEntry<String, PresenceRecord>> get presenceEvents =>
++      _presenceCtrl.stream;
++
++  /// Hook for ReceiveGate: updates announce policy and broadcasts presence if enabled.
++  void setAnnounce(AnnouncePolicy policy) {
++    announcePolicy = policy;
++    if (announcePolicy != AnnouncePolicy.none) {
++      unawaited(broadcastPresence());
++    }
++  }
++
++  @override
++  Future<void> start({OfferCallback? onOffer}) async {
++    _onOffer = onOffer;
++    await backend.connect([Uri.parse('relay://default')]);
++
++    final epoch = channelDeriver.currentEpoch(now: clock.now());
++
++    // Subscribe to inbound channels for all paired contacts (where this device is target)
++    for (final contact in trust.contacts) {
++      if (!contact.hasPairKey) continue;
++      final kPair = await secrets.get('kpair/${contact.deviceId}');
++      if (kPair == null) continue;
++
++      final inboundChannel = channelDeriver.deriveChannelId(
++        pairKey: kPair,
++        peerDeviceId: identity.identity.deviceId,
++        epoch: epoch,
++      );
++      await backend.subscribe(inboundChannel);
++    }
++
++    _backendSub = backend.events.listen(_handleEvent);
++
++    if (announcePolicy != AnnouncePolicy.none) {
++      await broadcastPresence();
++    }
++  }
++
++  void _handleEvent(RelayEvent event) {
++    unawaited(_processIncoming(event));
++  }
++
++  Future<void> _processIncoming(RelayEvent event) async {
++    final epoch = channelDeriver.currentEpoch(now: clock.now());
++
++    for (final contact in trust.contacts) {
++      if (!contact.hasPairKey) continue;
++      final kPair = await secrets.get('kpair/${contact.deviceId}');
++      if (kPair == null) continue;
++
++      final inboundChannel = channelDeriver.deriveChannelId(
++        pairKey: kPair,
++        peerDeviceId: identity.identity.deviceId,
++        epoch: epoch,
++      );
++      if (inboundChannel != event.channelIdHex) continue;
++
++      final envelopeKey = channelDeriver.deriveEnvelopeKey(
++        pairKey: kPair,
++        epoch: epoch,
++      );
++
++      final RendezvousRecord record;
++      try {
++        record = envelopeCodec.unseal(
++          payload: event.payload,
++          envelopeKey: envelopeKey,
++          channelIdHex: event.channelIdHex,
++        );
++      } catch (_) {
++        // Not decryptable with this key or authentication failed
++        continue;
++      }
++
++      try {
++        replayGuard.validate(
++          record,
++          channelIdHex: event.channelIdHex,
++          now: clock.now(),
++        );
++      } catch (_) {
++        // Replay or clock skew violation
++        continue;
++      }
++
++      if (record is PresenceRecord) {
++        presenceCache.recordPresence(
++          contact.deviceId,
++          record,
++          peerFingerprint: contact.fingerprint,
++        );
++        _presenceCtrl.add(MapEntry(contact.deviceId, record));
++      } else if (record is OfferRecord) {
++        final handler = _onOffer;
++        if (handler != null) {
++          final accepted = await handler(contact.deviceId, record);
++          final reply = ReplyRecord(
++            seq: ++_seq,
++            issuedAt: clock.now().millisecondsSinceEpoch,
++            offerId: record.offerId,
++            decision: accepted ? 'accept' : 'decline',
++            sealedAck: 'ACK-${record.offerId}',
++          );
++          final outboundChannel = channelDeriver.deriveChannelId(
++            pairKey: kPair,
++            peerDeviceId: contact.deviceId,
++            epoch: epoch,
++          );
++          final payload = envelopeCodec.seal(
++            record: reply,
++            envelopeKey: envelopeKey,
++            channelIdHex: outboundChannel,
++          );
++          await backend.publish(
++            RelayEvent(
++              id: hexOf(sha256Bytes(payload)),
++              channelIdHex: outboundChannel,
++              payload: payload,
++              createdAt: clock.now().millisecondsSinceEpoch ~/ 1000,
++            ),
++          );
++        }
++      } else if (record is ReplyRecord) {
++        final completer = _pendingOffers.remove(record.offerId);
++        completer?.complete(record);
++      } else if (record is RevokeRecord) {
++        presenceCache.evict(contact.deviceId);
++      }
++    }
++  }
++
++  @override
++  Future<void> broadcastPresence() async {
++    // When Receive mode is Off (AnnouncePolicy.none), zero presence events are published!
++    if (announcePolicy == AnnouncePolicy.none) {
++      return;
++    }
++
++    final now = clock.now();
++    final epoch = channelDeriver.currentEpoch(now: now);
++
++    for (final contact in trust.contacts) {
++      if (!contact.hasPairKey) continue;
++      final kPair = await secrets.get('kpair/${contact.deviceId}');
++      if (kPair == null) continue;
++
++      // Outbound to contact's channel (where contact is target)
++      final outboundChannel = channelDeriver.deriveChannelId(
++        pairKey: kPair,
++        peerDeviceId: contact.deviceId,
++        epoch: epoch,
++      );
++      final envelopeKey = channelDeriver.deriveEnvelopeKey(
++        pairKey: kPair,
++        epoch: epoch,
++      );
++
++      final record = PresenceRecord(
++        seq: ++_seq,
++        issuedAt: now.millisecondsSinceEpoch,
++        candidates: localCandidates,
++      );
++
++      final payload = envelopeCodec.seal(
++        record: record,
++        envelopeKey: envelopeKey,
++        channelIdHex: outboundChannel,
++      );
++
++      await backend.publish(
++        RelayEvent(
++          id: hexOf(sha256Bytes(payload)),
++          channelIdHex: outboundChannel,
++          payload: payload,
++          createdAt: now.millisecondsSinceEpoch ~/ 1000,
++        ),
++      );
++    }
++  }
++
++  @override
++  Future<ReplyRecord> sendOffer(
++    String peerDeviceId,
++    OfferRecord offer, {
++    Duration timeout = const Duration(seconds: 30),
++  }) async {
++    final kPair = await secrets.get('kpair/$peerDeviceId');
++    if (kPair == null) {
++      throw LsException(LsErrorCode.notFound, 'peer not paired');
++    }
++
++    final now = clock.now();
++    final epoch = channelDeriver.currentEpoch(now: now);
++    final outboundChannel = channelDeriver.deriveChannelId(
++      pairKey: kPair,
++      peerDeviceId: peerDeviceId,
++      epoch: epoch,
++    );
++    final envelopeKey = channelDeriver.deriveEnvelopeKey(
++      pairKey: kPair,
++      epoch: epoch,
++    );
++
++    final payload = envelopeCodec.seal(
++      record: offer,
++      envelopeKey: envelopeKey,
++      channelIdHex: outboundChannel,
++    );
++
++    final completer = Completer<ReplyRecord>();
++    _pendingOffers[offer.offerId] = completer;
++
++    await backend.publish(
++      RelayEvent(
++        id: hexOf(sha256Bytes(payload)),
++        channelIdHex: outboundChannel,
++        payload: payload,
++        createdAt: now.millisecondsSinceEpoch ~/ 1000,
++      ),
++    );
++
++    return completer.future.timeout(
++      timeout,
++      onTimeout: () {
++        _pendingOffers.remove(offer.offerId);
++        throw TimeoutException('offer timeout');
++      },
++    );
++  }
++
++  @override
++  Future<void> revokePairing(String peerDeviceId) async {
++    final kPair = await secrets.get('kpair/$peerDeviceId');
++    if (kPair != null) {
++      final now = clock.now();
++      final epoch = channelDeriver.currentEpoch(now: now);
++      final outboundChannel = channelDeriver.deriveChannelId(
++        pairKey: kPair,
++        peerDeviceId: peerDeviceId,
++        epoch: epoch,
++      );
++      final envelopeKey = channelDeriver.deriveEnvelopeKey(
++        pairKey: kPair,
++        epoch: epoch,
++      );
++
++      final record = RevokeRecord(
++        seq: ++_seq,
++        issuedAt: now.millisecondsSinceEpoch,
++        revokedAt: now.millisecondsSinceEpoch,
++      );
++
++      final payload = envelopeCodec.seal(
++        record: record,
++        envelopeKey: envelopeKey,
++        channelIdHex: outboundChannel,
++      );
++
++      await backend.publish(
++        RelayEvent(
++          id: hexOf(sha256Bytes(payload)),
++          channelIdHex: outboundChannel,
++          payload: payload,
++          createdAt: now.millisecondsSinceEpoch ~/ 1000,
++        ),
++      );
++    }
++
++    presenceCache.evict(peerDeviceId);
++    await secrets.delete('kpair/$peerDeviceId');
++    await trust.setPairKey(peerDeviceId, false);
++  }
++
++  @override
++  Future<void> stop() async {
++    _periodicTimer?.cancel();
++    _periodicTimer = null;
++    await _backendSub?.cancel();
++    _backendSub = null;
++    await backend.disconnect();
++    await _presenceCtrl.close();
++  }
++}

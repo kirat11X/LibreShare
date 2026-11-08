@@ -31,6 +31,7 @@ import '../security/contracts.dart';
 import '../security/crypto_primitives.dart' show b64urlDecode;
 import '../security/identity_proof.dart';
 import '../security/tls_context.dart';
+import 'capped_server_socket.dart';
 import 'incoming_transfer_handler.dart';
 import 'rate_limiter.dart';
 
@@ -89,6 +90,9 @@ class ApiServer {
     this.bodyIdleTimeout = const Duration(seconds: 5),
     RateLimiter? rateLimiter,
     this.onRegister,
+    this.maxConnections = 64,
+    this.maxConnectionsPerIp = 16,
+    this.tlsHandshakeTimeout = kDefaultHandshakeTimeout,
   }) : bindAddress = bindAddress ?? InternetAddress.anyIPv4,
        _rateLimiter = rateLimiter ?? RateLimiter() {
     if (security.isSecure && handler is! SecureTransferHandler) {
@@ -126,6 +130,16 @@ class ApiServer {
 
   /// Evaluated per request: true = Contacts-only visibility, strangers get the plain 404.
   final bool Function()? contactsOnly;
+
+  /// Most TCP connections open at once (accepted until closed; idle sockets, half-sent request
+  /// heads and unfinished TLS handshakes count). Further ones are closed at once.
+  final int maxConnections;
+
+  /// Most open TCP connections of one remote address (same rule as [maxConnections]).
+  final int maxConnectionsPerIp;
+
+  /// A TLS handshake still unfinished after this long is dropped (frees its connection slot).
+  final Duration tlsHandshakeTimeout;
 
   /// Interface to bind (default: all IPv4 interfaces).
   final InternetAddress bindAddress;
@@ -171,6 +185,8 @@ class ApiServer {
   /// Listener already closed by a graceful [stop]; connections may still be
   /// draining. Kept so a later `stop(force: true)` can escalate.
   HttpServer? _closing;
+  CappedServerSocket? _listener;
+  CappedServerSocket? _closingListener;
 
   int _inFlight = 0;
   Completer<void>? _drained;
@@ -194,7 +210,15 @@ class ApiServer {
         : math.max(preferredPort, maxPortFallback);
     for (var p = preferredPort; ; p++) {
       try {
-        final server = await _bind(p);
+        final listener = await _bind(p);
+        final HttpServer server;
+        try {
+          server = HttpServer.listenOn(listener);
+        } on Object {
+          await listener.close();
+          rethrow;
+        }
+        _listener = listener;
         server.listen(
           _onRequest,
           onError: (Object e) =>
@@ -228,14 +252,20 @@ class ApiServer {
     if (running != null) {
       _server = null;
       _closing = running;
+      _closingListener = _listener;
+      _listener = null;
     }
     final s = running ?? _closing;
     if (s == null) return;
+    final listener = _closingListener;
     if (force) {
       await s.close(force: true);
+      await listener?.close();
+      listener?.destroyAll();
       return;
     }
     await s.close();
+    await listener?.close();
     if (_inFlight > 0) {
       await (_drained ??= Completer<void>()).future;
     }
@@ -252,22 +282,20 @@ class ApiServer {
     }
   }
 
-  Future<HttpServer> _bind(int port) {
-    if (_secure) {
-      // TLS 1.3 only, the device identity certificate, no client certificate requested.
-      return HttpServer.bindSecure(
-        bindAddress,
-        port,
-        buildServerContext(security.identity!),
-      );
-    }
-    final ctx = securityContext;
-    if (ctx == null) return HttpServer.bind(bindAddress, port);
-    return HttpServer.bindSecure(
+  Future<CappedServerSocket> _bind(int port) {
+    // Every profile goes through the connection-capped listener; TLS is applied per socket there.
+    final SecurityContext? ctx = _secure
+        // TLS 1.3 only, the device identity certificate, no client certificate requested.
+        ? buildServerContext(security.identity!)
+        : securityContext;
+    return CappedServerSocket.bind(
       bindAddress,
       port,
-      ctx,
-      requestClientCertificate: requestClientCertificate,
+      maxConnections: maxConnections,
+      maxConnectionsPerIp: maxConnectionsPerIp,
+      handshakeTimeout: tlsHandshakeTimeout,
+      securityContext: ctx,
+      requestClientCertificate: !_secure && requestClientCertificate,
     );
   }
 

@@ -13,6 +13,8 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:args/args.dart';
 import 'package:logging/logging.dart';
@@ -44,6 +46,11 @@ Commands:
   contacts   Pinned devices                                ls contacts list|add|remove|block|unblock
                                                            add --id UUID --fp 64HEX [--alias A] [--trust known|trusted]
   pair       Pair two devices by invite (QR text)          ls pair --show | --scan URI
+  peers      List paired peers (Internet rendezvous)       ls peers
+  link       Share files via a public link (Internet)      ls link FILE... [--expires 1h] [--receivers 1]
+                                                           [--provider cloudflare|zrok|fake|manual:URL]
+  receive-link Download files from a share link            ls receive-link LINK [--dir DIR]
+                                                           [--insecure-dev-allow-loopback]
 
 Options of every command that talks to a peer:
   --secure (default) | --insecure-plaintext   TLS with a pinned identity, or the plain Increment 1/2 wire
@@ -62,6 +69,7 @@ class CliHooks {
     this.bindAddress,
     this.stop,
     this.handleSignals = true,
+    this.tunnelProvider,
   });
 
   /// One line of normal output (default: stdout).
@@ -83,6 +91,9 @@ class CliHooks {
 
   /// Watch SIGINT/SIGTERM (default). Off for in-process use.
   final bool handleSignals;
+
+  /// Custom or fake tunnel provider for link testing.
+  final TunnelProvider? tunnelProvider;
 }
 
 class _Io {
@@ -481,7 +492,17 @@ Future<int> runCli(
     )
     ..addOption('alias')
     ..addOption('pin')
-    ..addOption('concurrency', defaultsTo: '3')
+    ..addFlag('help', abbr: 'h', negatable: false, help: 'show this help')
+    ..addOption(
+      'speed',
+      help:
+          'eco (one chunk at a time), balanced (three, the default) or turbo '
+          '(eight chunks in flight). Local to this sender.',
+    )
+    ..addOption(
+      'concurrency',
+      help: 'chunks in flight per file; overrides --speed',
+    )
     ..addOption(
       'timeout',
       defaultsTo: '120',
@@ -537,6 +558,56 @@ Future<int> runCli(
       ..addOption('port', defaultsTo: '0')
       ..addOption('alias'),
   );
+  final peersParser = parser.addCommand('peers');
+  _addProfileOptions(peersParser);
+  final linkParser = parser.addCommand('link')
+    ..addOption(
+      'expires',
+      defaultsTo: '1h',
+      help: 'how long the link stays valid: 15m, 1h, 24h',
+    )
+    ..addOption(
+      'receivers',
+      defaultsTo: '1',
+      help: 'allowed receivers: 1 (default), N, or anyone',
+    )
+    ..addOption(
+      'provider',
+      defaultsTo: 'cloudflare',
+      help: 'tunnel provider: cloudflare, zrok, fake, or manual:URL',
+    )
+    ..addOption(
+      'port',
+      defaultsTo: '0',
+      help: 'origin server port (0 = ephemeral)',
+    )
+    ..addOption('zrok-token', help: 'account token for zrok provider')
+    ..addFlag(
+      'hide-ip',
+      negatable: false,
+      help: 'omit direct candidates and route through tunnel only',
+    )
+    ..addFlag(
+      'port-map',
+      negatable: false,
+      help: 'request UPnP/NAT-PMP port mapping on local gateway (default off)',
+    )
+    ..addOption('alias');
+  _addProfileOptions(linkParser);
+
+  final receiveLinkParser = parser.addCommand('receive-link')
+    ..addOption(
+      'dir',
+      defaultsTo: 'libreshare-downloads',
+      help: 'download directory',
+    )
+    ..addFlag(
+      'insecure-dev-allow-loopback',
+      negatable: false,
+      help: 'allow loopback / local IP hosts in link (for testing/development)',
+    )
+    ..addOption('alias');
+  _addProfileOptions(receiveLinkParser);
 
   final ArgResults top;
   try {
@@ -555,6 +626,10 @@ Future<int> runCli(
     );
   }
   final cmd = top.command;
+  if (cmd != null && cmd.name == 'send' && cmd['help'] == true) {
+    io.out(parser.commands['send']!.usage);
+    return 0;
+  }
   if (top['help'] == true || cmd == null) {
     io.out(_usage);
     return cmd == null && top['help'] != true ? 64 : 0;
@@ -576,6 +651,12 @@ Future<int> runCli(
       return _contacts(cmd, io);
     case 'pair':
       return _pair(cmd, io, hooks);
+    case 'link':
+      return _link(cmd, io, hooks);
+    case 'receive-link':
+      return _receiveLink(cmd, io, hooks);
+    case 'peers':
+      return _peers(cmd, io);
   }
   return 64;
 }
@@ -997,7 +1078,28 @@ Future<int> _send(ArgResults r, _Io io, CliHooks h) async {
     io.err('send: no files given');
     return 64;
   }
-  final concurrency = int.tryParse(r['concurrency'] as String) ?? 3;
+  // --speed picks the mode; absent means balanced. An explicit --concurrency
+  // (when given) wins over the mode's chunk count.
+  SpeedMode? speed;
+  final speedArg = r['speed'] as String?;
+  if (speedArg != null) {
+    speed = parseSpeedMode(speedArg);
+    if (speed == null) {
+      io.err('send: --speed must be one of: eco, balanced, turbo');
+      return 64;
+    }
+  }
+  // Absent means the speed mode's count; a bad value is a usage error.
+  var concurrency = kChunkConcurrencyFromProfile;
+  final concurrencyArg = r['concurrency'] as String?;
+  if (concurrencyArg != null) {
+    final n = int.tryParse(concurrencyArg);
+    if (n == null || n < 1) {
+      io.err('send: --concurrency must be a whole number, 1 or more');
+      return 64;
+    }
+    concurrency = n;
+  }
   final timeout = int.tryParse(r['timeout'] as String) ?? 120;
   final findTimeout = _parseSeconds(r['find-timeout'] as String?);
   if (deviceArg != null && findTimeout == null) {
@@ -1029,6 +1131,7 @@ Future<int> _send(ArgResults r, _Io io, CliHooks h) async {
     receiveConfig: const ReceiveConfig(initialMode: ReceiveOff()),
     security: setup.wiring,
     advertiseIp: setup.advertiseIp,
+    speedMode: speed ?? kDefaultSpeedMode,
   );
   OutgoingSend? running;
   DiscoveredDevice? chosen;
@@ -1596,5 +1699,357 @@ Future<int> _pairShow(
     return 1;
   } finally {
     await sub.cancel();
+  }
+}
+
+// ------------------------------------------------------------------- link
+
+Future<int> _link(ArgResults r, _Io io, CliHooks h) async {
+  if (r.rest.isEmpty) {
+    io.err('link: specify at least one file to share');
+    return 64;
+  }
+
+  final files = <File>[];
+  for (final arg in r.rest) {
+    final f = File(arg);
+    if (!f.existsSync()) {
+      io.err('link: file not found: $arg');
+      return 66;
+    }
+    files.add(f);
+  }
+
+  final expiresArg = r['expires'] as String? ?? '1h';
+  final window = _parseWindow(expiresArg);
+  if (window == null) {
+    io.err('link: invalid --expires: $expiresArg');
+    return 64;
+  }
+  final expiryDuration = window;
+
+  final recArg = r['receivers'] as String? ?? '1';
+  final int maxReceivers;
+  if (recArg.toLowerCase() == 'anyone') {
+    maxReceivers = 0;
+  } else {
+    final n = int.tryParse(recArg);
+    if (n == null || n < 1) {
+      io.err('link: invalid --receivers: $recArg');
+      return 64;
+    }
+    maxReceivers = n;
+  }
+
+  final su = await _setup(r, io);
+  final setup = su.setup;
+  if (setup == null) return su.code;
+
+  final dirArg = r['identity-dir'] as String?;
+  final identityDir = dirArg == null
+      ? _defaultIdentityDir()
+      : Directory(dirArg);
+
+  final port = int.tryParse(r['port'] as String? ?? '0') ?? 0;
+  final providerName = (r['provider'] as String? ?? 'cloudflare').trim();
+
+  final TunnelProvider provider;
+  if (h.tunnelProvider != null) {
+    provider = h.tunnelProvider!;
+  } else if (providerName == 'fake') {
+    provider = FakeTunnelProvider();
+  } else if (providerName.startsWith('manual:')) {
+    final urlStr = providerName.substring('manual:'.length);
+    provider = ManualUrlProvider(url: Uri.parse(urlStr));
+  } else if (providerName == 'zrok') {
+    final token = r['zrok-token'] as String? ?? '';
+    if (token.isEmpty) {
+      io.err('link: --zrok-token is required when using zrok provider');
+      await setup.close();
+      return 64;
+    }
+    provider = ZrokProvider(accountToken: token);
+  } else {
+    provider = CloudflaredProvider(appSupportDirectory: identityDir);
+  }
+
+  final rootKey = secureRandomBytes(kTunnelRootKeyBytes);
+  final tokenBytes = secureRandomBytes(16);
+  final tokenB64 = b64urlEncode(tokenBytes);
+
+  final keys = TunnelKeys.fromRootKey(rootKey);
+  final expiresAt = DateTime.now().toUtc().add(expiryDuration);
+
+  int totalBytes = 0;
+  final manifestFiles = <Map<String, dynamic>>[];
+  for (var i = 0; i < files.length; i++) {
+    final f = files[i];
+    final fileBytes = await f.readAsBytes();
+    final size = fileBytes.length;
+    totalBytes += size;
+    final fileHash = hexOf(sha256Bytes(fileBytes));
+    manifestFiles.add({
+      'index': i,
+      'name': f.uri.pathSegments.where((s) => s.isNotEmpty).last,
+      'size': size,
+      'sha256': fileHash,
+    });
+  }
+
+  final manifestJson = jsonEncode({'files': manifestFiles});
+  final sealedManifest = keys.seal(
+    TunnelPurpose.manifest,
+    utf8.encode(manifestJson),
+  );
+
+  const chunkSize = 4 * 1024 * 1024; // 4 MiB
+
+  final originShare = TunnelOriginShare(
+    token: tokenB64,
+    keys: keys,
+    sealedManifest: sealedManifest,
+    totalBytes: totalBytes,
+    maxReceivers: maxReceivers,
+    expiresAt: expiresAt,
+    getChunk: (fileIndex, chunkIndex) async {
+      if (fileIndex < 0 || fileIndex >= files.length) {
+        throw ArgumentError('Invalid fileIndex: $fileIndex');
+      }
+      final file = files[fileIndex];
+      final fileSize = file.lengthSync();
+      final start = chunkIndex * chunkSize;
+      if (start >= fileSize && fileSize > 0) {
+        throw RangeError(
+          'chunkIndex $chunkIndex out of range for size $fileSize',
+        );
+      }
+      final end = min(fileSize, start + chunkSize);
+      final length = end - start;
+      final raf = await file.open(mode: FileMode.read);
+      await raf.setPosition(start);
+      final rawChunk = await raf.read(length);
+      await raf.close();
+
+      return keys.seal(
+        TunnelPurpose.chunk,
+        rawChunk,
+        fileIndex: fileIndex,
+        chunkIndex: chunkIndex,
+      );
+    },
+    onCompleted: (claim) {
+      io.out('COMPLETED receiver=$claim');
+    },
+    onRevoked: (reason) {
+      io.err('REVOKED: $reason');
+    },
+  );
+
+  final originServer = TunnelOriginServer();
+  originServer.registerShare(originShare);
+  await originServer.start(port: port);
+
+  final TunnelHandle handle;
+  try {
+    handle = await provider.open(originServer.port);
+  } catch (e) {
+    io.err('link: failed to open tunnel: $e');
+    await originServer.stop();
+    await setup.close();
+    return 1;
+  }
+
+  final self = _selfFrom(r, 0, setup);
+  final fp = setup.wiring?.identity.identity.fingerprint;
+  final host = handle.publicBase.hasPort && handle.publicBase.port != 443
+      ? '${handle.publicBase.host}:${handle.publicBase.port}'
+      : handle.publicBase.host;
+  final expEpoch = expiresAt.millisecondsSinceEpoch ~/ 1000;
+  final aliasPart = self.alias.isNotEmpty
+      ? '&n=${Uri.encodeComponent(self.alias).replaceAll("'", "%27")}'
+      : '';
+  final fpPart = fp != null && fp.isNotEmpty
+      ? '&fp=${fp.substring(0, min(16, fp.length)).toUpperCase()}'
+      : '';
+  final hideIp = r['hide-ip'] as bool? ?? false;
+  if (!hideIp) {
+    io.out(
+      'DISCLOSURE: Direct internet paths include your public IP address. Pass --hide-ip for tunnel only.',
+    );
+  } else {
+    io.out('HIDE-IP: Direct candidates omitted. Tunnel-only routing active.');
+  }
+
+  final shareUrl =
+      'https://libreshare.github.io/r#v=1&h=$host&t=$tokenB64&k=${b64urlEncode(rootKey)}&m=$maxReceivers&e=$expEpoch$aliasPart$fpPart';
+  final shareLink = ShareLink.parse(shareUrl, allowDeveloperHosts: true);
+
+  io.out('LINK ${shareLink.encode()}');
+
+  final interrupt = _Interrupt(h);
+  while (!interrupt.isFired &&
+      !originShare.isCompleted &&
+      !originShare.isRevoked) {
+    if (DateTime.now().toUtc().isAfter(expiresAt)) {
+      io.out('EXPIRED');
+      break;
+    }
+    await Future.any([
+      Future<void>.delayed(const Duration(milliseconds: 100)),
+      interrupt.fired,
+    ]);
+  }
+
+  await handle.close();
+  await originServer.stop();
+  await interrupt.close();
+  await setup.close();
+  return 0;
+}
+
+// ----------------------------------------------------------- receive-link
+
+Future<int> _receiveLink(ArgResults r, _Io io, CliHooks h) async {
+  if (r.rest.isEmpty) {
+    io.err('receive-link: share link required');
+    return 64;
+  }
+  final linkStr = r.rest.first.trim();
+  final allowDev = r['insecure-dev-allow-loopback'] as bool? ?? false;
+
+  final ShareLink link;
+  try {
+    link = ShareLink.parse(linkStr, allowDeveloperHosts: allowDev);
+  } on ShareLinkException catch (e) {
+    io.err('receive-link: invalid link: $e');
+    return 64;
+  } catch (e) {
+    io.err('receive-link: failed to parse link: $e');
+    return 64;
+  }
+
+  if (link.isExpired(DateTime.now())) {
+    io.err('receive-link: link has expired');
+    return 1;
+  }
+
+  final dirPath = r['dir'] as String? ?? 'libreshare-downloads';
+  final dir = Directory(dirPath);
+  if (!dir.existsSync()) {
+    dir.createSync(recursive: true);
+  }
+
+  final keys = TunnelKeys.fromRootKey(link.rootKey);
+  final claimBytes = secureRandomBytes(16);
+  final claimStr = b64urlEncode(claimBytes);
+
+  final Uri originUri;
+  if (allowDev &&
+      (link.host.startsWith('127.0.0.1') ||
+          link.host.startsWith('localhost'))) {
+    final parts = link.host.split(':');
+    final p = parts.length > 1 ? int.parse(parts[1]) : 80;
+    originUri = Uri(scheme: 'http', host: parts[0], port: p);
+  } else {
+    originUri = link.originBase;
+  }
+
+  final candidate = Candidate.create(
+    kind: CandidateKind.tunnel,
+    host: link.host,
+    port: originUri.port > 0 ? originUri.port : 443,
+    peerFingerprint: link.senderFingerprintHint ?? '',
+  );
+
+  final conn = TunnelConnection(
+    candidate: candidate,
+    originBase: originUri,
+    token: link.tokenB64,
+    keys: keys,
+    claim: claimStr,
+  );
+
+  try {
+    final client = await conn.open();
+    final manifestRaw = await client.getManifestRaw();
+    final manifestMap = jsonDecode(manifestRaw) as Map<String, dynamic>;
+    final filesList = (manifestMap['files'] as List)
+        .cast<Map<String, dynamic>>();
+
+    const chunkSize = 4 * 1024 * 1024; // 4 MiB
+
+    for (final fInfo in filesList) {
+      final fid = fInfo['index'] as int;
+      final name = fInfo['name'] as String;
+      final expectedSha = (fInfo['sha256'] as String).toLowerCase();
+      final size = fInfo['size'] as int;
+
+      final targetFile = File('${dir.path}/$name');
+      final sink = targetFile.openWrite();
+      final downloadedBytes = BytesBuilder(copy: false);
+
+      final numChunks = size == 0 ? 0 : ((size + chunkSize - 1) ~/ chunkSize);
+
+      for (var c = 0; c < numChunks; c++) {
+        final chunkData = await client.getChunkRaw(fid, c);
+        sink.add(chunkData);
+        downloadedBytes.add(chunkData);
+        await client.sendChunkAck(fid, c);
+      }
+      await sink.flush();
+      await sink.close();
+
+      final actualSha = hexOf(sha256Bytes(downloadedBytes.takeBytes()))
+          .toLowerCase();
+      if (expectedSha.isNotEmpty && actualSha != expectedSha) {
+        io.err('receive-link: hash verification failed for $name');
+        try {
+          targetFile.deleteSync();
+        } catch (_) {}
+        return 1;
+      }
+
+      io.out('SAVED ${targetFile.path} $size bytes');
+    }
+
+    await client.sendFinalAck();
+    io.out('COMPLETE: all files received');
+    return 0;
+  } on Object catch (e) {
+    io.err('receive-link failed: $e');
+    return 1;
+  } finally {
+    await conn.close();
+  }
+}
+
+// ------------------------------------------------------------------- peers
+
+Future<int> _peers(ArgResults r, _Io io) async {
+  final dirArg = r['identity-dir'] as String?;
+  final SecurityWiring w;
+  try {
+    w = await SecurityWiring.open(
+      directory: dirArg == null ? _defaultIdentityDir() : Directory(dirArg),
+    );
+  } on IdentityLostException {
+    io.err('identity lost: it is never regenerated automatically');
+    return exitIdentityLost;
+  }
+  try {
+    final contacts = w.trust.contacts.where((c) => c.hasPairKey).toList();
+    if (contacts.isEmpty) {
+      io.out('No paired peers.');
+      return 0;
+    }
+    for (final c in contacts) {
+      final short = c.fingerprint.substring(0, min(16, c.fingerprint.length));
+      io.out(
+        'PEER ${c.deviceId} alias="${c.alias}" fp=$short trust=${c.trust.name}',
+      );
+    }
+    return 0;
+  } finally {
+    await w.close();
   }
 }

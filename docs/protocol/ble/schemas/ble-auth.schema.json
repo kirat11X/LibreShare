@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://libreshare.org/schemas/ble-auth.schema.json",
+  "title": "BleAuth",
+  "description": "LS-BLE/1 Encrypted AUTH message establishing device identity and LAN candidates.",
+  "type": "object",
+  "required": ["type", "certDerB64", "sigB64", "alias", "platform", "lanCands"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "auth"
+    },
+    "certDerB64": {
+      "type": "string",
+      "description": "Base64-encoded DER representation of the persistent identity certificate."
+    },
+    "sigB64": {
+      "type": "string",
+      "description": "Base64-encoded signature over the handshake transcript."
+    },
+    "alias": {
+      "type": "string"
+    },
+    "platform": {
+      "type": "string"
+    },
+    "lanCands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["ip", "port"],
+        "properties": {
+          "ip": { "type": "string" },
+          "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+          "iface": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

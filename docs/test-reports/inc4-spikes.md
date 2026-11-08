@@ -217,3 +217,63 @@ Executed on 2026-11-06 under `/tmp/libreshare-heavy.lock`:
   2. Pipelined transport & isolate worker pool for chunk reading and hashing.
   3. Option in the Flutter app interface for native hardware-accelerated SHA-256 (reaching >300 MB/s).
 
+
+## S0 (speed plan, orchestrator, 2026-11-07 19:46:21 by `date`): hashing options on this machine
+
+Machine: i7-13650HX (20 threads, SHA-NI), Fedora, system `libcrypto.so.3` (OpenSSL 3.5.9). Script: `.toolchain/scratch/speed-s0/bench_hash.dart` (scratch, not in the repo), run alone under the heavy lock with `dart run`, rc 0. Buffers of 4 MiB (the protocol chunk), digests checked against package:crypto.
+
+| Variant | MiB/s | ms per 4 MiB chunk (calling isolate) |
+|---|---|---|
+| A pure Dart (package:crypto), 1 core | 73.2 | 54.6 |
+| B libcrypto `EVP_Digest` via dart:ffi, 1 core, incl. memcpy into native memory | 1087.2 | 3.7 |
+| C isolate pool, pure Dart inside, 1 worker | 70.0 | calling isolate only pays the copy |
+| C pool, 2 workers | 143.2 | |
+| C pool, 4 workers | 274.0 | |
+| C pool, 6 workers | 388.6 | |
+| C pool, 8 workers | 418.4 | |
+
+Reading: native SHA-256 on the calling isolate is about 15 times faster than pure Dart and needs no pool on platforms where the system library can be loaded; a pool of pure-Dart workers scales almost linearly to about 400 MiB/s and is the fallback for Android and for hosts without the library. With B the receiver's two hash passes (chunk digest + whole-file digest) cost about 7.4 ms per 4 MiB instead of about 115 ms, so TLS (about 33 ms per 4 MiB at 122 MiB/s) becomes the largest remaining cost on the secure profile. Decision: S2 (native SHA-256 behind the existing `Sha256Provider` seam, with a load-time known-answer test and pure-Dart fallback) goes first, the pool (S1) follows as the fallback/Android path.
+
+## S6 receiver write path and multi-process ceiling
+
+Setup: 300 MiB random file, loopback, copy of the tree under `.toolchain/scratch/speed-s6/work/` (real tree untouched). One CLI snapshot, the variant is chosen at run time by `LS_WMODE` in the receiver (V0 = original code path). Five interleaved runs per cell (V0..V4 in turn), 20 cells = 100 transfers, every transfer `cmp`-identical to the source and no `.lspart*` left (0 failures, so no variant is invalid). Sender speed from the `SENT` line. Machine: 20 threads, another agent used it between my lock slots, so noise is high (min..max below).
+
+Variants: V0 baseline; V1 `setPositionSync`+`writeFromSync` per piece; V2 pieces coalesced into 256 KiB blocks, one awaited async write per block; V3 256 KiB blocks + `writeFromSync`; V4 one writer isolate, blocks sent as `TransferableTypedData`, the chunk is acked only after a sync ping is answered (a window of 2 pings in flight bounds memory to about 2 MiB).
+
+| Variant | plain C=8 med (min..max) | plain C=3 | secure C=8 | secure C=3 |
+|---|---|---|---|---|
+| V0 baseline | 141.1 (121..143) | 112.7 (104..128) | 75.7 (70..87) | 74.4 (51..84) |
+| V1 per-piece sync | 97.9 (66..139) -31% | 115.7 (110..136) +3% | 85.9 (77..91) +13% | 75.8 (58..86) +2% |
+| V2 256K async | 122.2 (83..138) -13% | 120.6 (78..135) +7% | 75.9 (76..85) 0% | 82.6 (68..85) +11% |
+| V3 256K sync | 111.3 (70..148) -21% | 121.9 (107..142) +8% | 72.8 (64..83) -4% | 84.6 (76..96) +14% |
+| V4 writer isolate | 106.9 (72..146) -24% | 108.4 (69..132) -4% | 79.5 (75..87) +5% | 80.7 (75..89) +8% |
+
+MiB/s, percentages are median versus V0 of the same column.
+
+Reading: no variant reaches +20% median on both plain and secure, and every variant is worse than -3% on at least one cell (V3 and V1 at plain C=8 by -21%/-31%, V2 -13%, V4 -24%). The secure gains (+11..14% for V2/V3 at C=3) are inside the 20-40% noise band. Plain at C=8 already runs near the plain transport ceiling (about 140), so extra copies or sync hops only lose. Conclusion: the receiver write path is not the main bottleneck; do not change it. `writeFromSync` is also rejected on risk grounds: it blocks the main isolate (which runs the Flutter UI) for the whole write, and on a slow target such as a USB 2.0 pendrive (about 20-30 MiB/s) every 256 KiB block would stall the UI thread for ~10 ms, a whole 4 MiB chunk for ~150 ms, i.e. visible jank, for no measurable gain.
+
+### V5 aggregate of independent parallel transfers (baseline code, C=3 each, own receiver/port/dir, 5 runs)
+
+| Parallel transfers | plain sum of SENT speeds, med (min..max) | secure |
+|---|---|---|
+| 1 | 85 (77..107) | 57 (45..64) |
+| 2 | 182 (143..244) | 101 (86..123) |
+| 4 | 433 (332..435) | 182 (128..213) |
+
+(Wall-clock for 4 x 300 MiB incl. process start and cmp: plain 3.5 s = about 340 MiB/s, secure 8.1 s = about 150 MiB/s, versus 1 x 300 MiB in 4.2 s / 6.4 s.) The n=1 reference here was lower than in the main table (machine load), so use ratios: 4 processes give roughly 2.5-5x (plain) and 3x (secure) the single-transfer rate on this 20-thread host. This is an upper bound: each pair has its own sender and receiver process, so both ends scale; a real multi-isolate receive inside one app would still share one sender. It shows the single-isolate engine, not the disk write, caps one transfer, so multi-isolate/multi-process receive (Inc 4b) can be worth it where the host has spare cores (desktop), but it needs a protocol-compatible split (per-connection isolate for TLS+hash) and gives nothing on weak phones with 2-4 usable cores.
+
+Recommendation: no patch from S6. Keep V0. If speed work continues, pursue Inc 4b (TLS/hash off the main isolate), not the write path.
+
+## S5: Per-speed-mode benchmark columns and regression gate (2026-11-08)
+
+Scope: `tools/bench/` only (`bench_lan.sh`, `gate.sh`, `benchmarks.csv`). The CSV gained a trailing `mode` column (the header was upgraded in place; legacy rows without it are read as balanced; the original is in `.toolchain/snap/benchmarks.csv.pre-s5`). `bench_lan.sh --speed eco|balanced|turbo` passes the mode to `ls send --speed`. Measured with 3 x 300 MiB loopback runs per mode and profile, all under `flock -o /tmp/libreshare-heavy.lock`, all with an exit code of 0 and a byte-identical cmp.
+
+| Mode | Secure MiB/s median (min..max) | Plain MiB/s median (min..max) |
+|---|---|---|
+| eco | 79.0 (78.9..79.0) | 108.8 (108.8..114.3) |
+| balanced | 87.4 (86.2..89.0) | 137.3 (136.1..141.1) |
+| turbo | 91.0 (90.0..91.3) | 147.0 (146.8..148.8) |
+
+Gate (`tools/bench/gate.sh`): per mode and profile it evaluates the median of the last 3 runs. Minimums (MiB/s): eco secure 47 / plain 65 (60% of the eco medians), balanced 45 / 65, turbo 45 / 80. Baselines are the medians above, and the 20% regression rule is kept. Overrides: `LS_MIN_<MODE>_<PROFILE>`, `LS_BASELINE_<MODE>_<PROFILE>`. Results: normal run exit 0; mutation (`LS_MIN_BALANCED_SECURE=100`, measured 87.4) exit 1.
+
+Note: these medians are higher than the earlier quick numbers (balanced 74 / 113, turbo 76 / 141). The minimums are kept at the agreed values, so they sit at about 50-60% of today's medians, which leaves room for the 20-40% run-to-run noise.

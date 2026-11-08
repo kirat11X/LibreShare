@@ -1,23 +1,12 @@
-# Increment 4 P4-8 App UI Report
+# Increment 4 Card P4-8 Report (ALREADY IN TREE)
 
-**Role:** Card D1 / P4-8 Flutter App Specialist  
-**Status:** PASSED (Unit & widget tests green, analyze rc=0, format rc=0)
+**Card:** P4-8 (Flutter App UI: ChannelBadge, HistoryScreen)  
+**Status:** ALREADY IN TREE (Widgets committed in tree; tests & verifier tests shipped)  
 
-## 1. Summary of Work Delivered
-Card P4-8 implements the user interface additions required for Increment 4:
-- `channel_badge.dart`:
-  - Visual status pill indicating active candidate tier (`Wi-Fi`, `LAN`, `Loopback`, `Tunnel`).
-  - Animated tier change transition when connection falls back between network interfaces.
-  - Interactive tooltip explaining current channel security and speed characteristics.
-- `history_screen.dart`:
-  - Transfer session audit log backed by `SessionStore` and `EventLog`.
-  - Displays session records, peer name, transfer direction, timestamp, total bytes, and final status (completed, failed, cancelled).
-  - Search and filter capabilities.
-- Tests:
-  - `channel_badge_test.dart`: Widget test asserting correct colors, icons, and labels across all `CandidateKind` variants.
-  - `history_screen_test.dart`: Screen test verifying rendering of empty state, populated session list, and status formatting.
-
-## 2. Quality Gate Verification
-- `flutter test apps/libreshare_app/test/widgets/channel_badge_test.dart apps/libreshare_app/test/screens/history_screen_test.dart`: all passed (rc=0).
-- `dart analyze apps/libreshare_app/lib/`: 0 errors, 0 warnings (rc=0).
-- `dart format --output=none --set-exit-if-changed apps/libreshare_app/lib/`: 0 changed (rc=0).
+## Quality & Evidence
+- `flutter test --no-pub apps/libreshare_app/test/widgets/channel_badge_test.dart apps/libreshare_app/test/screens/history_screen_test.dart`
+  Output: `+6: All tests passed!` (`rc=0`)
+- `dart analyze apps/libreshare_app/lib/widgets/channel_badge.dart apps/libreshare_app/lib/screens/history_screen.dart`: 0 issues (`rc=0`)
+- `dart format --output=none --set-exit-if-changed ...`: 0 changed (`rc=0`)
+- 4/4 mutations killed (`M1_KILLED`..`M4_KILLED`) in `verifier-report.md`.
+- Code exists in real tree; tests verified green.

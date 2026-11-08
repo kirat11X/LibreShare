@@ -1,0 +1,318 @@
+--- /dev/null	2026-11-07 14:59:32.635351164 +0530
++++ b/packages/libreshare_core/lib/src/ble/host_policy.dart	2026-11-07 18:51:23.748276254 +0530
+@@ -0,0 +1,50 @@
++import 'beacon_types.dart';
++
++/// The winning party selected to host the ad-hoc Wi-Fi hotspot.
++enum HostWinner { sideA, sideB, neither }
++
++/// Deterministically elects the hotspot host between two peers (design 03 section 4.2).
++///
++/// Rules:
++/// 1. Only one side `canHost` -> it hosts. If neither canHost -> `neither`.
++/// 2. Prefer a side with `hostKeepsUplink` (Ethernet, STA+AP concurrency, cellular).
++/// 3. Prefer Android LOHS (rank 3) > Linux NM (rank 2) > Windows legacy AP (rank 1) > other (rank 0).
++/// 4. Tiebreaker: the receiver hosts (LSP server and hotspot on one machine, eliminating an IP handoff hop).
++HostWinner chooseHost({
++  required BeaconCap capA,
++  required BeaconCap capB,
++  required bool isReceiverA,
++}) {
++  // 1. Only one side canHost -> it hosts.
++  if (capA.canHost && !capB.canHost) return HostWinner.sideA;
++  if (!capA.canHost && capB.canHost) return HostWinner.sideB;
++  if (!capA.canHost && !capB.canHost) return HostWinner.neither;
++
++  // 2. Both canHost: prefer a side with hostKeepsUplink
++  if (capA.hostKeepsUplink && !capB.hostKeepsUplink) return HostWinner.sideA;
++  if (!capA.hostKeepsUplink && capB.hostKeepsUplink) return HostWinner.sideB;
++
++  // 3. Platform preference order
++  int platformRank(BlePlatform p) {
++    switch (p) {
++      case BlePlatform.android:
++        return 3;
++      case BlePlatform.linux:
++        return 2;
++      case BlePlatform.windows:
++        return 1;
++      case BlePlatform.macos:
++      case BlePlatform.ios:
++      case BlePlatform.other:
++        return 0;
++    }
++  }
++
++  final rankA = platformRank(capA.platform);
++  final rankB = platformRank(capB.platform);
++  if (rankA > rankB) return HostWinner.sideA;
++  if (rankB > rankA) return HostWinner.sideB;
++
++  // 4. Tiebreaker -> receiver hosts
++  return isReceiverA ? HostWinner.sideA : HostWinner.sideB;
++}
+--- /dev/null	2026-11-07 14:59:32.635351164 +0530
++++ b/packages/libreshare_core/lib/src/ble/testing/fake_hotspot.dart	2026-11-07 18:50:38.742392750 +0530
+@@ -0,0 +1,217 @@
++import 'dart:async';
++
++import '../hotspot_backend.dart';
++
++class _FakeAirNetwork {
++  _FakeAirNetwork({
++    required this.ssid,
++    required this.psk,
++    required this.hostIp,
++    required this.port,
++  });
++
++  final String ssid;
++  final String psk;
++  final String hostIp;
++  final int port;
++  bool isBlackholed = false;
++  final Set<_FakeJoinResult> joinedClients = {};
++}
++
++/// Simulated in-memory Wi-Fi radio medium for ad-hoc hotspot testing.
++class FakeAir {
++  final Map<String, _FakeAirNetwork> _networks = {};
++
++  void publishNetwork({
++    required String ssid,
++    required String psk,
++    required String hostIp,
++    required int port,
++  }) {
++    _networks[ssid] = _FakeAirNetwork(
++      ssid: ssid,
++      psk: psk,
++      hostIp: hostIp,
++      port: port,
++    );
++  }
++
++  void withdrawNetwork(String ssid) {
++    final net = _networks.remove(ssid);
++    if (net != null) {
++      for (final client in List.of(net.joinedClients)) {
++        client._onDisconnectedByAir();
++      }
++    }
++  }
++
++  /// Simulates a physical radio drop / netem blackhole.
++  void cut(String ssid) {
++    final net = _networks[ssid];
++    if (net != null) {
++      net.isBlackholed = true;
++      for (final client in List.of(net.joinedClients)) {
++        client._onDisconnectedByAir();
++      }
++    }
++  }
++
++  /// Restores network after a cut.
++  void restore(String ssid) {
++    final net = _networks[ssid];
++    if (net != null) {
++      net.isBlackholed = false;
++    }
++  }
++
++  bool isAvailable(String ssid) {
++    final net = _networks[ssid];
++    return net != null && !net.isBlackholed;
++  }
++}
++
++class _FakeReservation implements HotspotReservation {
++  _FakeReservation(this._backend, this.ssid, this.psk, this.hostIp, this.port);
++
++  final FakeHotspotBackend _backend;
++  @override
++  final String ssid;
++  @override
++  final String psk;
++  @override
++  final String hostIp;
++  @override
++  final int port;
++  bool _stopped = false;
++
++  @override
++  Future<void> stop() async {
++    if (_stopped) return;
++    _stopped = true;
++    _backend._onReservationStopped(this);
++  }
++}
++
++class _FakeJoinResult implements HotspotJoinResult {
++  _FakeJoinResult(this._backend, this.clientIp, this.gatewayIp, this._network);
++
++  final FakeHotspotBackend _backend;
++  @override
++  final String clientIp;
++  @override
++  final String gatewayIp;
++  final _FakeAirNetwork _network;
++  bool _disconnected = false;
++
++  final Completer<void> _disconnectedCompleter = Completer<void>();
++  Future<void> get onDisconnected => _disconnectedCompleter.future;
++
++  @override
++  Future<void> disconnect() async {
++    if (_disconnected) return;
++    _disconnected = true;
++    _network.joinedClients.remove(this);
++    _backend._onJoinDisconnected(this);
++    if (!_disconnectedCompleter.isCompleted) {
++      _disconnectedCompleter.complete();
++    }
++  }
++
++  void _onDisconnectedByAir() {
++    if (_disconnected) return;
++    _disconnected = true;
++    _network.joinedClients.remove(this);
++    _backend._onJoinDisconnected(this);
++    if (!_disconnectedCompleter.isCompleted) {
++      _disconnectedCompleter.complete();
++    }
++  }
++}
++
++/// Simulated implementation of [HotspotBackend].
++class FakeHotspotBackend implements HotspotBackend {
++  FakeHotspotBackend({
++    FakeAir? air,
++    this.canHost = true,
++    this.canJoin = true,
++    this.hostKeepsUplink = false,
++    this.defaultHostIp = '192.168.49.1',
++    this.defaultClientIp = '192.168.49.2',
++  }) : air = air ?? FakeAir();
++
++  final FakeAir air;
++  @override
++  final bool canHost;
++  @override
++  final bool canJoin;
++  @override
++  final bool hostKeepsUplink;
++  final String defaultHostIp;
++  final String defaultClientIp;
++
++  final List<_FakeReservation> _activeReservations = [];
++  final List<_FakeJoinResult> _activeJoins = [];
++
++  int get activeReservationsCount => _activeReservations.length;
++  int get activeJoinsCount => _activeJoins.length;
++  int teardownCalls = 0;
++
++  @override
++  Future<HotspotReservation> startHotspot({
++    required String ssid,
++    required String psk,
++    int port = 53318,
++  }) async {
++    if (!canHost) {
++      throw UnsupportedError('This backend cannot host hotspots');
++    }
++    air.publishNetwork(ssid: ssid, psk: psk, hostIp: defaultHostIp, port: port);
++    final reservation = _FakeReservation(this, ssid, psk, defaultHostIp, port);
++    _activeReservations.add(reservation);
++    return reservation;
++  }
++
++  @override
++  Future<HotspotJoinResult> joinHotspot({
++    required String ssid,
++    required String psk,
++    Duration timeout = const Duration(seconds: 90),
++  }) async {
++    if (!canJoin) {
++      throw UnsupportedError('This backend cannot join hotspots');
++    }
++    final net = air._networks[ssid];
++    if (net == null || net.isBlackholed) {
++      throw TimeoutException('Hotspot network $ssid not found on air', timeout);
++    }
++    if (net.psk != psk) {
++      throw StateError('Authentication failed: PSK mismatch for $ssid');
++    }
++
++    final joinResult = _FakeJoinResult(this, defaultClientIp, net.hostIp, net);
++    net.joinedClients.add(joinResult);
++    _activeJoins.add(joinResult);
++    return joinResult;
++  }
++
++  void _onReservationStopped(_FakeReservation reservation) {
++    _activeReservations.remove(reservation);
++    air.withdrawNetwork(reservation.ssid);
++    teardownCalls++;
++  }
++
++  void _onJoinDisconnected(_FakeJoinResult joinResult) {
++    _activeJoins.remove(joinResult);
++    teardownCalls++;
++  }
++
++  /// Cleanly closes all active reservations and joins.
++  Future<void> dispose() async {
++    for (final res in List.of(_activeReservations)) {
++      await res.stop();
++    }
++    for (final join in List.of(_activeJoins)) {
++      await join.disconnect();
++    }
++  }
++}
+--- a/packages/libreshare_core/lib/src/connection/http_connection.dart	2026-11-06 16:53:32.331309008 +0530
++++ b/packages/libreshare_core/lib/src/connection/http_connection.dart	2026-11-07 18:50:32.100409942 +0530
+@@ -36,9 +36,15 @@
+   @override
+   Future<PeerClient> open({Duration? timeout}) async {
+     _state = ConnectionState.connecting;
+-    final effectiveTimeout = timeout ?? const Duration(seconds: 3);
++    final effectiveTimeout = timeout ?? candidate.connectBudget;
+ 
+     try {
++      if (candidate.setupBudget > Duration.zero) {
++        await candidate.setup().timeout(candidate.setupBudget);
++      } else {
++        await candidate.setup();
++      }
++
+       final client = clientFactory != null
+           ? clientFactory!(candidate, security)
+           : ApiClient(
+@@ -90,6 +96,7 @@
+       return client;
+     } catch (e) {
+       _state = ConnectionState.failed;
++      await candidate.teardown();
+       rethrow;
+     }
+   }
+@@ -99,5 +106,6 @@
+     _state = ConnectionState.closed;
+     _client?.close();
+     _client = null;
++    await candidate.teardown();
+   }
+ }
+--- a/packages/libreshare_core/lib/src/ble/ble_contracts.dart
++++ b/packages/libreshare_core/lib/src/ble/ble_contracts.dart
+@@ -6,6 +6,8 @@
+ export 'ble_messages.dart';
+ export 'ble_session.dart';
+ export 'gatt_frame_codec.dart';
++export 'host_policy.dart';
+ export 'hotspot_backend.dart';
+ export 'testing/fake_ble_bus.dart';
++export 'testing/fake_hotspot.dart';
+ export 'visibility_manager.dart';

@@ -40,6 +40,19 @@ class CancelSignal {
 /// promptly once [cancel] is cancelled.
 typedef FindEndpoint = Future<SendEndpoint?> Function(CancelSignal cancel);
 
+/// Thrown by a [FindEndpoint] that refused every candidate on a security ground (a candidate
+/// presented another key than the pinned one, and was never sent to). The send then ends with
+/// a [SendResult] that carries [reason] instead of throwing.
+class EndpointRefusedException implements Exception {
+  const EndpointRefusedException(this.reason, this.cause);
+
+  final FailureReason reason;
+  final Object cause;
+
+  @override
+  String toString() => 'EndpointRefusedException(${reason.wire})';
+}
+
 /// One outgoing send in flight.
 ///
 /// * [events]: this send's own events, in order: `SessionCreated(outgoing)`
@@ -145,6 +158,8 @@ class OutgoingSend {
       } finally {
         client.close();
       }
+    } on EndpointRefusedException catch (e) {
+      return _ended(sw, e.reason);
     } finally {
       _finished = true;
       unawaited(_events.close());

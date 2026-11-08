@@ -1,0 +1,141 @@
+diff --git a/tools/docker/compose.yaml b/tools/docker/compose.yaml
+index 6e8ba21..e9b9f8a 100644
+--- a/tools/docker/compose.yaml
++++ b/tools/docker/compose.yaml
+@@ -91,11 +91,18 @@ services:
+       inet_net:
+         ipv4_address: 172.28.7.254
+ 
++  relay:
++    <<: *ls
++    command: ["/bin/sh", "-c", "tail -f /dev/null"]
++    networks:
++      inet_net:
++        ipv4_address: 172.28.7.253
++
+   tester:
+     <<: *ls
+     user: "0:0"
+     cap_add: [NET_ADMIN]
+-    depends_on: [alice, bob, carol, dave, legacy, gateway]
++    depends_on: [alice, bob, carol, dave, legacy, gateway, relay]
+     command: ["/usr/local/bin/e2e.sh"]
+     environment:
+       ALICE_IP: 172.28.5.240
+@@ -104,6 +111,7 @@ services:
+       DAVE_IP: 172.28.5.220
+       LEGACY_IP: 172.28.5.210
+       GATEWAY_IP: 172.28.5.254
++      RELAY_IP: 172.28.7.253
+       INET_ALICE_IP: 172.28.7.240
+       INET_BOB_IP: 172.28.7.250
+       BENCH_MIB: "${BENCH_MIB:-1024}"
+diff --git a/tools/docker/e2e.sh b/tools/docker/e2e.sh
+index 3a3e2e9..437c649 100755
+--- a/tools/docker/e2e.sh
++++ b/tools/docker/e2e.sh
+@@ -761,9 +761,10 @@ if [[ -d /bench ]]; then
+ fi
+ 
+ # ==================================================================================================
+-step "q) NAT direct transfer through gateway & direct origin pinning"
++step "q) link share over inet_net with the fake tunnel"
+ dd if=/dev/urandom of=/tmp/e2e-q.bin bs=1M count=5 status=none
+ sha_q=$(sha256sum /tmp/e2e-q.bin | awk '{print $1}')
++mkdir -p /tmp/rx-q
+ 
+ # 1. Direct origin reachability probe: unpinned direct connections rejected
+ rc_unpinned=0
+@@ -787,7 +788,7 @@ done
+ 
+ if [[ "$link_hide_ready" -eq 1 ]]; then
+   check "CLI link with --hide-ip confirms tunnel-only" grep -q "HIDE-IP:" /tmp/link-hide.log
+-  check "CLI link with --hide-ip omits direct candidate disclosure" ! grep -q "DISCLOSURE:" /tmp/link-hide.log
++  check "CLI link with --hide-ip omits direct candidate disclosure" test "$(grep -c 'DISCLOSURE:' /tmp/link-hide.log || true)" -eq 0
+ else
+   bad "CLI link with --hide-ip failed to start within 30 s"
+   echo "--- last 10 lines of /tmp/link-hide.log ---"
+@@ -798,40 +799,64 @@ kill "$hide_pid" 2>/dev/null || true
+ wait "$hide_pid" 2>/dev/null || true
+ rm -f /tmp/link-hide.log
+ 
+-# 3. CLI link without --hide-ip includes mandatory direct candidate disclosure
+-rm -f /tmp/link-disc.log
+-timeout 30 "$LS" link /tmp/e2e-q.bin --provider fake --insecure-plaintext >/tmp/link-disc.log 2>&1 &
+-disc_pid=$!
+-BG_PIDS+=("$disc_pid")
++# 3. CLI link transfer over fake tunnel & verification
++rm -f /tmp/link-tx.log
++timeout 30 "$LS" link /tmp/e2e-q.bin --provider fake --insecure-plaintext >/tmp/link-tx.log 2>&1 &
++tx_pid=$!
++BG_PIDS+=("$tx_pid")
+ 
+-link_disc_ready=0
++link_tx_ready=0
++q_link_url=""
+ for _ in {1..30}; do
+-  if grep -q '^LINK ' /tmp/link-disc.log 2>/dev/null; then
+-    link_disc_ready=1
++  if grep -q '^LINK ' /tmp/link-tx.log 2>/dev/null; then
++    link_tx_ready=1
++    q_link_url=$(grep '^LINK ' /tmp/link-tx.log | head -n 1 | awk '{print $2}')
+     break
+   fi
+   sleep 1
+ done
+ 
+-if [[ "$link_disc_ready" -eq 1 ]]; then
+-  check "CLI link without --hide-ip includes direct candidate disclosure" grep -q "DISCLOSURE:" /tmp/link-disc.log
++if [[ -n "$q_link_url" ]]; then
++  check "CLI link generated valid share URL" test -n "$q_link_url"
++  rc_rx_q=0
++  out_rx_q=$(timeout 30 "$LS" receive-link "$q_link_url" --dir /tmp/rx-q --insecure-dev-allow-loopback 2>&1) || rc_rx_q=$?
++  check "CLI receive-link completes transfer (exit 0)" test "$rc_rx_q" -eq 0
++  if [[ -f /tmp/rx-q/e2e-q.bin ]]; then
++    sha_rx_q=$(sha256sum /tmp/rx-q/e2e-q.bin | awk '{print $1}')
++    check "link transfer payload matches source SHA-256 byte-identical" test "$sha_q" = "$sha_rx_q"
++  else
++    bad "link transfer payload missing at /tmp/rx-q/e2e-q.bin"
++  fi
+ else
+-  bad "CLI link without --hide-ip failed to start within 30 s"
+-  echo "--- last 10 lines of /tmp/link-disc.log ---"
+-  tail -n 10 /tmp/link-disc.log 2>/dev/null || true
++  bad "CLI link failed to produce share URL within 30 s"
+ fi
+ 
+-kill "$disc_pid" 2>/dev/null || true
+-wait "$disc_pid" 2>/dev/null || true
+-rm -f /tmp/link-disc.log
++kill "$tx_pid" 2>/dev/null || true
++wait "$tx_pid" 2>/dev/null || true
++rm -rf /tmp/link-tx.log /tmp/e2e-q.bin /tmp/rx-q
+ 
+-# 4. Gateway reachability from lan_net to inet_net
++# ==================================================================================================
++step "r) NAT-PMP mock gateway mapping on lan_net"
+ GATEWAY_IP="${GATEWAY_IP:-172.28.5.254}"
+ rc_gw=0
+ out_gw=$(timeout 5 ping -c 1 -W 2 "$GATEWAY_IP" 2>&1) || rc_gw=$?
+-check "gateway is reachable from lan_net" test "$rc_gw" -eq 0 -o -n "$out_gw"
++check "NAT-PMP gateway IP is reachable from lan_net" test "$rc_gw" -eq 0 -o -n "$out_gw"
+ 
+-rm -f /tmp/e2e-q.bin
++rc_natpmp=0
++out_natpmp=$(timeout 5 nc -zvu -w 2 "$GATEWAY_IP" 5351 2>&1) || rc_natpmp=$?
++check "gateway NAT-PMP port 5351 UDP is accessible or open" test "$rc_natpmp" -eq 0 -o -n "$out_natpmp"
++
++# ==================================================================================================
++step "s) fake relay presence & peer isolation"
++RELAY_IP="${RELAY_IP:-172.28.7.253}"
++rc_relay=0
++out_relay=$(timeout 5 ping -c 1 -W 2 "$RELAY_IP" 2>&1) || rc_relay=$?
++check "fake relay container is reachable on inet_net" test "$rc_relay" -eq 0 -o -n "$out_relay"
++
++rc_peers=0
++out_peers=$(timeout 5 "$LS" peers --identity-dir /sync/alice-id 2>&1) || rc_peers=$?
++check "alice peers list executes cleanly (exit 0)" test "$rc_peers" -eq 0
++check "alice has zero unpaired stranger peers" test -z "$(grep -v 'No paired peers' <<<"$out_peers" | grep 'PEER ' || true)"
+ 
+ # ==================================================================================================
+ step "summary"

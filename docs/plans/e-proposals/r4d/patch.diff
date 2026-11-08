@@ -1,5 +1,5 @@
 --- a/packages/libreshare_core/lib/src/discovery/peer_registry.dart	2026-11-06 16:53:32.330309011 +0530
-+++ b/packages/libreshare_core/lib/src/discovery/peer_registry.dart	2026-11-06 20:52:09.386190451 +0530
++++ b/packages/libreshare_core/lib/src/discovery/peer_registry.dart	2026-11-07 15:15:18.666750894 +0530
 @@ -62,6 +62,15 @@
    final Map<String, Uint8List> _certs = {};
    static const int _maxCertMemory = 1024;
@@ -22,7 +22,7 @@
        final fp = cert.fingerprint.toUpperCase();
 -      _certs.remove(fp);
 +      _dropCert(fp);
-+      final source = _sourceOf(fp);
++      final source = _sourceOf(fp, cert.subjectCn);
        _certs[fp] = Uint8List.fromList(certDer);
 +      _certSource[fp] = source;
 +      _certSourceCount[source] = (_certSourceCount[source] ?? 0) + 1;
@@ -35,23 +35,22 @@
        }
        return true;
      } on Object {
-@@ -222,6 +237,32 @@
+@@ -222,6 +237,31 @@
      }
    }
  
-+  // Address of the listed peer that announced [fp]; a shared bucket when the
-+  // fingerprint is not listed or is claimed by more than one deviceId (a
-+  // fingerprint is public, so a claim must not steer the attribution).
-+  String _sourceOf(String fp) {
-+    String? address;
-+    String? claimant;
-+    for (final e in _peers.entries) {
-+      if (e.value.device.info.fingerprint.toUpperCase() != fp) continue;
-+      if (claimant != null && claimant != e.key) return _unknownSource;
-+      claimant = e.key;
-+      address ??= e.value.device.address;
++  // Address of the listed peer that IS the certificate's owner: the entry whose
++  // deviceId equals the certificate's subject CN and whose fingerprint is [fp].
++  // Entries that merely claim [fp] under another deviceId do not count (a
++  // fingerprint is public, so a claim must not steer the attribution). The
++  // shared bucket is used when no such entry is listed.
++  String _sourceOf(String fp, String? subjectCn) {
++    if (subjectCn == null) return _unknownSource;
++    final e = _peers[subjectCn];
++    if (e == null || e.device.info.fingerprint.toUpperCase() != fp) {
++      return _unknownSource;
 +    }
-+    return address ?? _unknownSource;
++    return e.device.address;
 +  }
 +
 +  void _dropCert(String fp) {

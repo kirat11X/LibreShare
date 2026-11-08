@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://libreshare.org/schemas/ble-m1.schema.json",
+  "title": "BleM1",
+  "description": "LS-BLE/1 M1 Hello message from Central to Peripheral.",
+  "type": "object",
+  "required": ["type", "v", "epk", "n"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "m1"
+    },
+    "v": {
+      "type": "integer",
+      "const": 1
+    },
+    "epk": {
+      "type": "string",
+      "description": "Base64-encoded ephemeral X25519 public key."
+    },
+    "n": {
+      "type": "string",
+      "description": "Base64-encoded 16-byte random nonce."
+    },
+    "eidHint": {
+      "type": "string",
+      "description": "Optional 2-byte prefix of the matched EID."
+    }
+  },
+  "additionalProperties": false
+}

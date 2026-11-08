@@ -1,0 +1,45 @@
+--- packages/libreshare_core/lib/src/ble/testing/fake_ble_bus.dart
++++ packages/libreshare_core/lib/src/ble/testing/fake_ble_bus.dart
+@@ -199,8 +199,10 @@
+ 
+ /// Simulated peripheral GATT server.
+ class FakeBleGattServer implements BleGattServer {
+-  FakeBleGattServer._();
++  FakeBleGattServer._(this._bus, this._deviceId);
+ 
++  final FakeBleBus _bus;
++  final String _deviceId;
+   bool _running = false;
+   final StreamController<BleGattSession> _incoming =
+       StreamController<BleGattSession>.broadcast();
+@@ -214,11 +216,13 @@
+   @override
+   Future<void> start() async {
+     _running = true;
++    _bus.registerServer(_deviceId, this);
+   }
+ 
+   @override
+   Future<void> stop() async {
+     _running = false;
++    _bus.unregisterServer(_deviceId);
+   }
+ 
+   void _acceptSession(FakeBleGattSession session) {
+@@ -229,6 +233,7 @@
+ 
+   void dispose() {
+     _running = false;
++    _bus.unregisterServer(_deviceId);
+     _incoming.close();
+   }
+ }
+@@ -241,7 +246,7 @@
+     required this.address,
+     this.name,
+     this.rssi = -60,
+-  }) : _server = FakeBleGattServer._();
++  }) : _server = FakeBleGattServer._(bus, deviceId);
+ 
+   final FakeBleBus bus;
+   final String deviceId;

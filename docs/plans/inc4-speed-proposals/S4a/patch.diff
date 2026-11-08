@@ -1,0 +1,70 @@
+--- a/packages/libreshare_core/lib/src/transfer/file_receiver.dart
++++ b/packages/libreshare_core/lib/src/transfer/file_receiver.dart
+@@ -722,8 +722,14 @@
+     var chunkOk = false;
+     RandomAccessFile? raf;
+ 
++    // Chunks up to 8 MiB are buffered, digested once, and written with a single
++    // writeFrom only after the digest check passed. Larger chunks keep the
++    // piece-by-piece path.
++    const bufferLimit = 8 * 1024 * 1024;
++    final buffer = expected <= bufferLimit ? Uint8List(expected) : null;
++
+     try {
+-      if (!already) {
++      if (buffer == null && !already) {
+         raf = await f.partial.open(mode: FileMode.append);
+       }
+       await for (final piece in body) {
+@@ -733,13 +739,17 @@
+             'chunk $index is longer than its declared length $expected',
+           );
+         }
+-        hasher.add(piece);
+-        if (inOrderForRunning && f.runningHasher != null) {
+-          f.runningHasher!.add(piece);
+-        }
+-        if (raf != null && piece.isNotEmpty) {
+-          await raf.setPosition(range.start + received);
+-          await raf.writeFrom(piece);
++        if (buffer != null) {
++          buffer.setRange(received, received + piece.length, piece);
++        } else {
++          hasher.add(piece);
++          if (inOrderForRunning && f.runningHasher != null) {
++            f.runningHasher!.add(piece);
++          }
++          if (raf != null && piece.isNotEmpty) {
++            await raf.setPosition(range.start + received);
++            await raf.writeFrom(piece);
++          }
+         }
+         received += piece.length;
+       }
+@@ -749,6 +759,7 @@
+           'chunk $index has $received of $expected bytes',
+         );
+       }
++      if (buffer != null) hasher.add(buffer);
+       final chunkHex = hasher.finishHex();
+       if (expectedHash != null && chunkHex != expectedHash) {
+         if (inOrderForRunning) {
+@@ -760,6 +771,18 @@
+           'chunk $index failed its SHA-256 check',
+         );
+       }
++      if (buffer != null) {
++        if (inOrderForRunning && f.runningHasher != null) {
++          f.runningHasher!.add(buffer);
++        }
++        if (!already) {
++          raf = await f.partial.open(mode: FileMode.append);
++          if (expected > 0) {
++            await raf.setPosition(range.start);
++            await raf.writeFrom(buffer);
++          }
++        }
++      }
+       if (inOrderForRunning) {
+         f.nextExpectedChunkIndex++;
+       }

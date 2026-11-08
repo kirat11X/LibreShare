@@ -1,0 +1,465 @@
+diff --git a/packages/libreshare_core/lib/libreshare_core.dart b/packages/libreshare_core/lib/libreshare_core.dart
+index b61ad13..56c47ba 100644
+--- a/packages/libreshare_core/lib/libreshare_core.dart
++++ b/packages/libreshare_core/lib/libreshare_core.dart
+@@ -116,3 +116,5 @@ export 'src/rendezvous/channel_deriver.dart';
+ export 'src/rendezvous/envelope_codec.dart';
+ export 'src/rendezvous/rendezvous_service.dart';
+ export 'src/rendezvous/rendezvous_candidate_source.dart';
++export 'src/rendezvous/replay_guard.dart';
++export 'src/rendezvous/in_memory_relay.dart';
+diff --git a/packages/libreshare_core/lib/src/rendezvous/channel_deriver.dart b/packages/libreshare_core/lib/src/rendezvous/channel_deriver.dart
+index 0630f2d..9afd139 100644
+--- a/packages/libreshare_core/lib/src/rendezvous/channel_deriver.dart
++++ b/packages/libreshare_core/lib/src/rendezvous/channel_deriver.dart
+@@ -1,8 +1,18 @@
+-// ChannelDeriver contract for epoch calculation and channel key derivation.
++// Concrete ChannelDeriver for daily epoch channels and envelope keys.
+ library;
+ 
++import 'dart:convert';
+ import 'dart:typed_data';
+ 
++import '../security/crypto_primitives.dart';
++
++/// Converts a 64-bit integer to 8 big-endian bytes.
++Uint8List int64ToBe(int value) {
++  final bd = ByteData(8);
++  bd.setInt64(0, value);
++  return bd.buffer.asUint8List();
++}
++
+ /// Derives ephemeral daily channels and envelope encryption keys from pairwise secret.
+ abstract interface class ChannelDeriver {
+   /// Computes the current 24-hour UTC epoch number.
+@@ -18,3 +28,46 @@ abstract interface class ChannelDeriver {
+   /// Derives the 32-byte AES-256-GCM envelope encryption key for [epoch].
+   Uint8List deriveEnvelopeKey({required Uint8List pairKey, int? epoch});
+ }
++
++/// Standard production implementation of [ChannelDeriver] (LSP-R1 Section 2).
++class ChannelDeriverImpl implements ChannelDeriver {
++  const ChannelDeriverImpl();
++
++  @override
++  int currentEpoch({DateTime? now}) {
++    final utc = (now ?? DateTime.now()).toUtc();
++    return utc.millisecondsSinceEpoch ~/ (86400 * 1000);
++  }
++
++  @override
++  String deriveChannelId({
++    required Uint8List pairKey,
++    required String peerDeviceId,
++    int? epoch,
++  }) {
++    if (pairKey.length != 32) {
++      throw ArgumentError('pairKey must be exactly 32 bytes');
++    }
++    final ep = epoch ?? currentEpoch();
++    final bytes = BytesBuilder(copy: false);
++    bytes.add(ascii.encode('LSP-R1-CHAN'));
++    bytes.add(int64ToBe(ep));
++    bytes.add(utf8.encode(peerDeviceId));
++
++    return hexOf(hmacSha256(pairKey, bytes.takeBytes())).toLowerCase();
++  }
++
++  @override
++  Uint8List deriveEnvelopeKey({required Uint8List pairKey, int? epoch}) {
++    if (pairKey.length != 32) {
++      throw ArgumentError('pairKey must be exactly 32 bytes');
++    }
++    final ep = epoch ?? currentEpoch();
++    return hkdfSha256(
++      ikm: pairKey,
++      salt: int64ToBe(ep),
++      info: ascii.encode('LSP-R1-ENV'),
++      length: 32,
++    );
++  }
++}
+diff --git a/packages/libreshare_core/lib/src/rendezvous/envelope_codec.dart b/packages/libreshare_core/lib/src/rendezvous/envelope_codec.dart
+index 7b82952..0df5f50 100644
+--- a/packages/libreshare_core/lib/src/rendezvous/envelope_codec.dart
++++ b/packages/libreshare_core/lib/src/rendezvous/envelope_codec.dart
+@@ -1,10 +1,27 @@
+-// EnvelopeCodec contract for encrypting and padding inner records.
++// EnvelopeCodec implementation for discrete bucketing and AES-256-GCM envelope encryption.
+ library;
+ 
++import 'dart:convert';
++import 'dart:math';
+ import 'dart:typed_data';
+ 
++import 'package:pointycastle/export.dart';
++
+ import 'records.dart';
+ 
++/// Supported padding bucket boundaries in bytes per LSP-R1 Section 3.1.
++const List<int> kRendezvousBuckets = [512, 1024, 2048, 4096];
++
++/// Nonce length for AES-GCM in bytes.
++const int kRendezvousNonceBytes = 12;
++
++/// Authentication tag length for AES-GCM in bytes.
++const int kRendezvousTagBytes = 16;
++
++/// Total encryption overhead (nonce + tag).
++const int kRendezvousOverheadBytes =
++    kRendezvousNonceBytes + kRendezvousTagBytes;
++
+ /// Handles padding bucketing, AAD authentication, and AES-256-GCM envelope sealing.
+ abstract interface class EnvelopeCodec {
+   /// Encrypts and pads [record] using [envelopeKey] bound to [channelIdHex].
+@@ -12,6 +29,7 @@ abstract interface class EnvelopeCodec {
+     required RendezvousRecord record,
+     required Uint8List envelopeKey,
+     required String channelIdHex,
++    Random? nonceSource,
+   });
+ 
+   /// Decrypts, verifies AAD, depads, and deserializes [payload] using [envelopeKey].
+@@ -21,3 +39,137 @@ abstract interface class EnvelopeCodec {
+     required String channelIdHex,
+   });
+ }
++
++/// Production implementation of [EnvelopeCodec] using pointycastle AES-256-GCM.
++class EnvelopeCodecImpl implements EnvelopeCodec {
++  const EnvelopeCodecImpl();
++
++  @override
++  Uint8List seal({
++    required RendezvousRecord record,
++    required Uint8List envelopeKey,
++    required String channelIdHex,
++    Random? nonceSource,
++  }) {
++    if (envelopeKey.length != 32) {
++      throw ArgumentError('envelopeKey must be 32 bytes');
++    }
++
++    final jsonBytes = utf8.encode(jsonEncode(record.toJson()));
++    final innerLen = jsonBytes.length;
++
++    // Format: 2 bytes length prefix (u16be) + jsonBytes + zero padding
++    final totalUnpadded = 2 + innerLen;
++    int targetBucket = -1;
++    for (final b in kRendezvousBuckets) {
++      if (totalUnpadded <= b) {
++        targetBucket = b;
++        break;
++      }
++    }
++
++    if (targetBucket < 0) {
++      throw FormatException(
++        'Record exceeds max bucket size (4096 bytes): $totalUnpadded',
++      );
++    }
++
++    final plaintext = Uint8List(targetBucket);
++    final bd = ByteData.sublistView(plaintext);
++    bd.setUint16(0, innerLen);
++    plaintext.setRange(2, 2 + innerLen, jsonBytes);
++    // Remaining bytes in plaintext are already 0
++
++    // Nonce (12 bytes)
++    final rand = nonceSource ?? Random.secure();
++    final nonce = Uint8List(kRendezvousNonceBytes);
++    for (var i = 0; i < kRendezvousNonceBytes; i++) {
++      nonce[i] = rand.nextInt(256);
++    }
++
++    // AAD: "LSP-R1:" + channelIdHex
++    final aad = ascii.encode('LSP-R1:$channelIdHex');
++
++    // AES-GCM Encrypt
++    final cipher = GCMBlockCipher(AESEngine());
++    final params = AEADParameters(KeyParameter(envelopeKey), 128, nonce, aad);
++    cipher.init(true, params);
++
++    final out = Uint8List(cipher.getOutputSize(plaintext.length));
++    final len = cipher.processBytes(plaintext, 0, plaintext.length, out, 0);
++    final finalLen = cipher.doFinal(out, len);
++    final totalCiphertextLen = len + finalLen;
++
++    final result = Uint8List(kRendezvousNonceBytes + totalCiphertextLen);
++    result.setRange(0, kRendezvousNonceBytes, nonce);
++    result.setRange(
++      kRendezvousNonceBytes,
++      result.length,
++      Uint8List.sublistView(out, 0, totalCiphertextLen),
++    );
++
++    return result;
++  }
++
++  @override
++  RendezvousRecord unseal({
++    required Uint8List payload,
++    required Uint8List envelopeKey,
++    required String channelIdHex,
++  }) {
++    if (envelopeKey.length != 32) {
++      throw ArgumentError('envelopeKey must be 32 bytes');
++    }
++    if (payload.length < kRendezvousOverheadBytes + 2) {
++      throw const FormatException('Payload too short for rendezvous envelope');
++    }
++
++    final nonce = Uint8List.sublistView(payload, 0, kRendezvousNonceBytes);
++    final ciphertextWithTag = Uint8List.sublistView(
++      payload,
++      kRendezvousNonceBytes,
++    );
++    final aad = ascii.encode('LSP-R1:$channelIdHex');
++
++    final cipher = GCMBlockCipher(AESEngine());
++    final params = AEADParameters(KeyParameter(envelopeKey), 128, nonce, aad);
++    cipher.init(false, params);
++
++    final out = Uint8List(cipher.getOutputSize(ciphertextWithTag.length));
++    final int len;
++    try {
++      final processed = cipher.processBytes(
++        ciphertextWithTag,
++        0,
++        ciphertextWithTag.length,
++        out,
++        0,
++      );
++      final finalLen = cipher.doFinal(out, processed);
++      len = processed + finalLen;
++    } catch (e) {
++      throw FormatException(
++        'Envelope decryption failed or authentication tag mismatch: $e',
++      );
++    }
++
++    final plaintext = Uint8List.sublistView(out, 0, len);
++    if (plaintext.length < 2) {
++      throw const FormatException('Decrypted plaintext too short');
++    }
++
++    final bd = ByteData.sublistView(plaintext);
++    final innerLen = bd.getUint16(0);
++
++    if (2 + innerLen > plaintext.length) {
++      throw FormatException(
++        'Invalid inner payload length: $innerLen in plaintext of ${plaintext.length}',
++      );
++    }
++
++    final jsonBytes = plaintext.sublist(2, 2 + innerLen);
++    final jsonMap = jsonDecode(utf8.decode(jsonBytes)) as Map<String, dynamic>;
++
++    return RendezvousRecord.fromJson(jsonMap);
++  }
++}
+diff --git a/packages/libreshare_core/lib/src/rendezvous/in_memory_relay.dart b/packages/libreshare_core/lib/src/rendezvous/in_memory_relay.dart
+new file mode 100644
+index 0000000..0568120
+--- /dev/null
++++ b/packages/libreshare_core/lib/src/rendezvous/in_memory_relay.dart
+@@ -0,0 +1,104 @@
++// InMemoryRelay backend for hermetic unit testing and simulated multi-relay failover.
++library;
++
++import 'dart:async';
++
++import 'rendezvous_backend.dart';
++
++/// Hermetic in-memory relay backend implementing [RendezvousBackend].
++class InMemoryRelay implements RendezvousBackend {
++  InMemoryRelay({this.name = 'in-memory-relay'});
++
++  final String name;
++
++  final StreamController<RendezvousStatus> _statusCtrl =
++      StreamController<RendezvousStatus>.broadcast();
++  final StreamController<RelayEvent> _eventCtrl =
++      StreamController<RelayEvent>.broadcast();
++
++  final Set<String> _subscriptions = {};
++  bool _isConnected = false;
++
++  /// Optional hook to simulate network delays.
++  Duration? latency;
++
++  /// Channels whose traffic is intentionally dropped (for fault testing).
++  final Set<String> droppedChannels = {};
++
++  @override
++  Stream<RendezvousStatus> get statusStream => _statusCtrl.stream;
++
++  @override
++  Stream<RelayEvent> get events => _eventCtrl.stream;
++
++  bool get isConnected => _isConnected;
++
++  @override
++  Future<void> connect(List<Uri> relayUrls) async {
++    _statusCtrl.add(RendezvousStatus.connecting);
++    if (latency != null) {
++      await Future<void>.delayed(latency!);
++    } else {
++      await Future<void>.delayed(Duration.zero);
++    }
++    _isConnected = true;
++    _statusCtrl.add(RendezvousStatus.connected);
++  }
++
++  @override
++  Future<void> disconnect() async {
++    _isConnected = false;
++    _subscriptions.clear();
++    _statusCtrl.add(RendezvousStatus.disconnected);
++  }
++
++  @override
++  Future<void> subscribe(String channelIdHex) async {
++    _subscriptions.add(channelIdHex.toLowerCase());
++  }
++
++  @override
++  Future<void> unsubscribe(String channelIdHex) async {
++    _subscriptions.remove(channelIdHex.toLowerCase());
++  }
++
++  @override
++  Future<void> publish(RelayEvent event) async {
++    if (!_isConnected) {
++      throw StateError('Cannot publish when relay is disconnected');
++    }
++
++    final chan = event.channelIdHex.toLowerCase();
++    if (droppedChannels.contains(chan)) {
++      // Intentionally drop event for fault testing
++      return;
++    }
++
++    if (latency != null) {
++      await Future<void>.delayed(latency!);
++    }
++
++    // Deliver to event stream if subscribed
++    if (_subscriptions.contains(chan)) {
++      _eventCtrl.add(event);
++    }
++  }
++
++  /// Broadcasts an event to a specific target relay instance.
++  void deliverExternal(RelayEvent event) {
++    if (!_isConnected) return;
++    final chan = event.channelIdHex.toLowerCase();
++    if (droppedChannels.contains(chan)) return;
++
++    if (_subscriptions.contains(chan)) {
++      _eventCtrl.add(event);
++    }
++  }
++
++  /// Closes all controllers.
++  Future<void> close() async {
++    await disconnect();
++    await _statusCtrl.close();
++    await _eventCtrl.close();
++  }
++}
+diff --git a/packages/libreshare_core/lib/src/rendezvous/replay_guard.dart b/packages/libreshare_core/lib/src/rendezvous/replay_guard.dart
+new file mode 100644
+index 0000000..911c09b
+--- /dev/null
++++ b/packages/libreshare_core/lib/src/rendezvous/replay_guard.dart
+@@ -0,0 +1,89 @@
++// ReplayGuard enforcing monotonically increasing sequence numbers and clock skew bounds.
++library;
++
++import 'records.dart';
++
++/// Validation failure reasons for rendezvous records.
++enum ReplayViolation {
++  clockSkewExceeded,
++  sequenceNotMonotonic,
++  duplicateOfferId,
++  duplicateNonce,
++}
++
++/// Thrown when an incoming rendezvous record violates replay or freshness rules.
++class ReplayException implements Exception {
++  const ReplayException(this.violation, [this.message = '']);
++  final ReplayViolation violation;
++  final String message;
++
++  @override
++  String toString() =>
++      'ReplayException(${violation.name}${message.isNotEmpty ? ': $message' : ''})';
++}
++
++/// Tracks received message sequence numbers, nonces, and offer IDs per channel.
++class ReplayGuard {
++  ReplayGuard({this.maxSkew = const Duration(seconds: 120)});
++
++  final Duration maxSkew;
++  final Map<String, int> _highestSeq = {};
++  final Set<String> _seenOfferIds = {};
++  final Set<String> _seenNonces = {};
++
++  /// Validates [record] freshness and sequencing for [channelIdHex].
++  ///
++  /// Throws [ReplayException] if any invariant is violated.
++  void validate(
++    RendezvousRecord record, {
++    required String channelIdHex,
++    DateTime? now,
++  }) {
++    final currentTimeMs = (now ?? DateTime.now())
++        .toUtc()
++        .millisecondsSinceEpoch;
++    final skewMs = (currentTimeMs - record.issuedAt).abs();
++
++    if (skewMs > maxSkew.inMilliseconds) {
++      throw ReplayException(
++        ReplayViolation.clockSkewExceeded,
++        'Clock skew of ${skewMs}ms exceeds max allowed ${maxSkew.inMilliseconds}ms',
++      );
++    }
++
++    final highest = _highestSeq[channelIdHex];
++    if (highest != null && record.seq <= highest) {
++      throw ReplayException(
++        ReplayViolation.sequenceNotMonotonic,
++        'Sequence ${record.seq} is not greater than highest seen $highest',
++      );
++    }
++
++    if (record is OfferRecord) {
++      if (_seenOfferIds.contains(record.offerId)) {
++        throw ReplayException(
++          ReplayViolation.duplicateOfferId,
++          'Duplicate offerId ${record.offerId} already processed',
++        );
++      }
++      _seenOfferIds.add(record.offerId);
++    } else if (record is ProbeRecord) {
++      if (_seenNonces.contains(record.nonce)) {
++        throw ReplayException(
++          ReplayViolation.duplicateNonce,
++          'Duplicate probe nonce ${record.nonce}',
++        );
++      }
++      _seenNonces.add(record.nonce);
++    }
++
++    _highestSeq[channelIdHex] = record.seq;
++  }
++
++  /// Clears internal state (for testing or key rotation).
++  void reset() {
++    _highestSeq.clear();
++    _seenOfferIds.clear();
++    _seenNonces.clear();
++  }
++}

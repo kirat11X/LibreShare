@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://libreshare.example/protocol/lspr1/schemas/rendezvous-record.schema.json",
+  "title": "RendezvousRecord",
+  "description": "Inner decrypted record transmitted inside an LSP-R1 encrypted envelope (LSP-R1 Section 4).",
+  "type": "object",
+  "required": ["v", "type", "seq", "issuedAt"],
+  "properties": {
+    "v": {
+      "type": "integer",
+      "const": 1,
+      "description": "Protocol version integer."
+    },
+    "type": {
+      "type": "string",
+      "enum": ["presence", "probe", "offer", "reply", "revoke", "pair-hello", "pair-accept"],
+      "description": "Discriminator string identifying the record type."
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Monotonically increasing sequence number per sender/channel."
+    },
+    "issuedAt": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Unix timestamp in milliseconds when the record was constructed."
+    },
+    "ttl": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Time-to-live in seconds for presence announcements."
+    },
+    "candidates": {
+      "type": "array",
+      "description": "Direct connection candidates (e.g. direct IPv6, mapped IPv4).",
+      "items": {
+        "type": "object",
+        "required": ["kind", "host", "port"],
+        "properties": {
+          "kind": { "type": "string" },
+          "host": { "type": "string" },
+          "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+        }
+      }
+    },
+    "caps": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Supported capabilities (e.g. rdv1, tls13)."
+    },
+    "nonce": {
+      "type": "string",
+      "description": "Cryptographic nonce string for probe and pairing handshakes."
+    },
+    "offerId": {
+      "type": "string",
+      "description": "Unique transfer offer identifier."
+    },
+    "manifest": {
+      "type": "object",
+      "description": "Summary metadata of files included in the transfer offer."
+    },
+    "tunnelOffer": {
+      "type": "object",
+      "description": "Encrypted tunnel connection fallback parameters."
+    },
+    "decision": {
+      "type": "string",
+      "enum": ["accept", "reject"],
+      "description": "Decision state for reply records."
+    },
+    "sealedAck": {
+      "type": "string",
+      "description": "Cryptographically sealed acceptance or rejection token."
+    },
+    "revokedAt": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Unix timestamp in milliseconds when pairing was revoked."
+    }
+  },
+  "examples": [
+    {
+      "v": 1,
+      "type": "presence",
+      "seq": 1,
+      "issuedAt": 1799284800000,
+      "ttl": 300,
+      "candidates": [
+        {
+          "kind": "directIpv6",
+          "host": "2001:db8::1",
+          "port": 53330
+        }
+      ],
+      "caps": ["rdv1"]
+    },
+    {
+      "v": 1,
+      "type": "offer",
+      "seq": 2,
+      "issuedAt": 1799284810000,
+      "offerId": "off_9f82bc710a",
+      "manifest": {
+        "sessionId": "s1",
+        "totalSize": 100
+      },
+      "tunnelOffer": {
+        "provider": "cloudflare",
+        "url": "https://example.com"
+      },
+      "candidates": [
+        {
+          "kind": "directIpv6",
+          "host": "2001:db8::1",
+          "port": 53330
+        }
+      ]
+    }
+  ]
+}

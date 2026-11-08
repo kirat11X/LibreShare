@@ -321,9 +321,24 @@ class MulticastDiscovery implements DeviceDiscovery {
     if (bytes == null) return;
     try {
       transport.sendMulticast(bytes);
+      // A probe is also sent from an ephemeral source port, so that the
+      // unicast replies (to the probe's source port) reach us even when other
+      // LibreShare processes on this host share the discovery port.
+      final Object t = transport;
+      if (t is ProbeFromEphemeralPort && _isProbe()) {
+        t.sendProbeFromEphemeralPort(bytes);
+      }
       _announcesSent++;
     } on Object catch (e) {
       _log.warning('multicast announce failed: $e');
+    }
+  }
+
+  bool _isProbe() {
+    try {
+      return probes && _selfInfo().port == 0;
+    } on Object {
+      return false;
     }
   }
 

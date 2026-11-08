@@ -1,0 +1,41 @@
+--- packages/libreshare_core/lib/src/discovery/multicast_discovery.dart	2026-11-06 22:29:04.440739271 +0530
++++ "packages/libreshare_core/lib/src/discovery/multicast_discovery.dart"	2026-11-07 18:07:42.518060921 +0530
+@@ -29,6 +29,7 @@
+ 
+ import '../clock.dart';
+ import '../model/device.dart';
++import '../protocol.dart';
+ import '../security/contracts.dart';
+ import '../security/identity_proof.dart' show verifySignature;
+ import '../server/rate_limiter.dart';
+@@ -566,6 +567,9 @@
+     if (bytes == null) return;
+     try {
+       transport.sendUnicast(bytes, packet.source, packet.port);
++      if (packet.source.isLoopback || packet.port == kDefaultPort) {
++        transport.sendMulticast(bytes);
++      }
+       _repliesSent++;
+     } on Object catch (e) {
+       _log.fine('unicast reply to ${packet.source.address} failed: $e');
+--- packages/libreshare_cli/lib/ls_cli.dart	2026-11-06 17:29:32.675382978 +0530
++++ "packages/libreshare_cli/lib/ls_cli.dart"	2026-11-07 18:07:00.920138538 +0530
+@@ -1166,6 +1166,7 @@
+   }
+ 
+   if (scan) unawaited(engine.scanNetwork().then((_) {}, onError: (_) {}));
++  unawaited(engine.refresh().then((_) {}, onError: (_) {}));
+   final matches = await _awaitMatches(engine, selector, timeout);
+   if (matches.isEmpty) {
+     io.err(
+@@ -1214,6 +1215,10 @@
+     }
+   }
+ 
++  if (_matchDevices(engine.currentDevices, selector).isNotEmpty) {
++    settle = Timer(const Duration(milliseconds: 300), finish);
++  }
++
+   final sub = engine.devices.listen((all) {
+     if (_matchDevices(all, selector).isNotEmpty) {
+       settle ??= Timer(const Duration(milliseconds: 300), finish);

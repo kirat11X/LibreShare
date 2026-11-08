@@ -12,6 +12,7 @@
 !/tools/docker/carol.sh
 !/tools/docker/dave.sh
 !/tools/docker/legacy.sh
+!/tools/docker/cut_wifi.sh
 
 # ... minus build products and test code inside packages/
 **/.dart_tool

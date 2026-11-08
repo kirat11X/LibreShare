@@ -1,0 +1,60 @@
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -9,6 +9,31 @@
+ 
+ ## [Unreleased]
+ 
++### Added
++
++#### Increment 5b (Direct Internet Paths & Port Mapping Contracts - Applied)
++- **Contracts & Seams (K0):** Defined `OriginKind`, `PortMapping`, `GatewayInfo`, `PortMapper`, and `ReachabilityProbe` interfaces.
++- **Pure IP Classifier & STUN Client (K1):** Table-driven IP categorization (`IpClassifier`) distinguishing global unicast, RFC 1918 private, CGNAT (100.64.0.0/10), ULA, and loopback ranges; RFC 5389 STUN binding request client and reachability probe.
++- **Port Mapping Protocols (K2):** Full UPnP-IGD, NAT-PMP, and PCP implementations with hostile gateway SSRF mitigations (RFC 1918 bound, XML cap <= 64 KiB, no redirects), port collision retries, and unmap-on-exit leak prevention in `UnifiedPortMapper`.
++
++#### Increment 5 Groundwork (Applied)
++- **Tunnel Crypto Engine (H1):** RFC 5869 HKDF subkey derivation (`sid`, `manifest`, `data`, `ack`, `sas`), random 96-bit nonces, AAD authentication, and 2^24 seal count security limits.
++- **Share Link Model (H2):** Canonical URL fragment parsing/encoding with strict host bounds, base64url secrets, and parameter validation.
++- **Secret Redactor (H3):** Pure, idempotent log sanitization redacting secret keys, tokens, PINs, and sensitive fragments without false positives on hashes.
++
++#### Increment 4 (Speed & Platform Baselines - Applied)
++- **Native SHA-256 via FFI:** Hardware-accelerated hashing engine binding OpenSSL `libcrypto` / Windows `bcrypt` with pure-Dart fallback, scaling hashing speeds to >500 MiB/s.
++- **Speed Profiles:** Configurable `eco`, `balanced`, and `turbo` modes tuning buffer sizes, parallelism, and chunk pipeline depth.
++- **Speed Regression Gate:** Automated benchmarking gate enforcing throughput regressions (47-91 MiB/s secure, 65-147 MiB/s plain).
++
++#### High-Level Test Suites (Applied)
++- **CLI Matrix E2E (T2):** Real process send/receive matrix covering 0-byte files, nested directories, unicode names, path traversal defenses, 2 GiB sparse files, and transfer cancellation.
++- **Protocol Fuzz & Property Tests (T3):** Seeded fuzzers for frame codecs, filename sanitization, and chunk-range arithmetic.
++- **Security Threat Model Regressions (T4):** Test suites validating mTLS certificate pinning, PIN brute-force lockout, and log hygiene.
++- **Soak & Stress Tests (T5):** Multi-session stress testing, 1,000 tiny files transfer, and bounded RSS memory growth.
++- **Windows Path & File Semantics (T7):** Strict verification of Windows reserved names, alternate data streams (`:Zone.Identifier`), and file locking semantics.
++- **Live Schema Conformance (T8):** Strict JSON-schema validation across all live wire protocol frames and LSP-1 message definitions.
++
+ ### Planned
+ - Cloudflare Quick Tunnel and zrok encrypted fallback paths (Increment 5).
+ - Background Android Receive Service (P9) with persistent notification controls.
+--- a/docs/traceability.md
++++ b/docs/traceability.md
+@@ -28,6 +28,12 @@
+ | FR-16 | Security: mTLS + fingerprint pinning, TOFU + SAS, optional PIN (5 failures/IP -> 10 min block), rate limits, consent, filename sanitization (path traversal lands inside the download dir). | `security/*`, `transfer/filename_sanitizer.dart`, `server/rate_limiter.dart`, `engine/security_wiring.dart` | `security/pinning_test.dart`, `security/key_change_test.dart`, `security/rate_limit_test.dart`, `security/pin_test.dart`, `security/oversize_test.dart`, `security/token_test.dart`, `security/engine_tofu_test.dart`, `integration/path_traversal_secure_test.dart`; ahead of schedule in Inc 1: `unit/filename_sanitizer_test.dart`, `unit/sanitizer_fuzz_test.dart`, `unit/rate_limiter_test.dart`, `conformance/api_conformance_test.dart` (429 + traversal containment), `integration/two_engine_test.dart` (`../../evil.txt` lands inside the download dir; `..` in `relativePath` refused) | 3 | building blocks reviewed; engine wiring pending |
+ | FR-17 | Transfers work in both directions between two instances: A sends to B, then B sends to A. | `engine/libreshare_engine.dart` (Inc 1: CLI `send`/`receive` over `ApiServer`/`ApiClient`) | `integration/two_engine_test.dart` (A->B then B->A; both directions concurrently) | 1 | inc1-done |
+ | FR-18 | Receive mode (roadmap Inc 2, design 01 section 1; not in the spec text): Off / For(N) / Always with visibility everyone; Off = listener closed and nothing announced as receivable (announces port 0 as a send-only probe); a window that ends mid-transfer drains (new sessions get 409 `BUSY`); platform pauses; state restored after a crash. Contacts-only visibility is refused until pairing exists (Inc 3). | `receive/{receive_state,receive_gate,receive_scheduler,receive_settings,receive_controller}.dart`, `storage/receive_settings_store.dart`, `engine/libreshare_engine.dart` (is the `ReceiveGate`), `libreshare_cli/lib/ls_cli.dart` (`ls receive --for/--always/--visibility/--no-discovery`) | `unit/receive_controller_test.dart` (37, fake clock: the design's 12-test plan plus races, restore and env causes), `unit/receive_settings_store_test.dart` (11), `integration/receive_mode_engine_test.dart` (13: refused when Off, a real window expiring, drain with a pending session and 409 `BUSY`, deadline, restore, rethrown bind error), `integration/engine_discovery_test.dart` (group "Receive Off"), `libreshare_cli/test/cli_commands_test.dart` (`--for` window, `EXPIRED`, invalid combinations). App: `receive_card_test.dart` (10), `settings_screen_test.dart` (20, Receive section Off/For N/Always, visibility, autostart), `shell_wiring_test.dart` (14: close-to-tray, `--hidden`, tray Quit stops the engine first, MulticastLock held/released). Contacts-only (Inc 3): `security/contacts_only_server_test.dart`, `security/contacts_only_discovery_test.dart`, `security/engine_contacts_only_test.dart`, `integration/contacts_only_engine_test.dart`. **Still open (Inc 3):** the Android foreground `ReceiveService`. | 2 (Receive mode); 3 (Contacts-only) | inc2-done (Receive mode); building blocks reviewed, engine wiring pending (Contacts-only) |
++| FR-12 | Speed profiles: Eco (single isolate, reduced memory), Balanced (default), Turbo (multi-isolate pipeline). | `transfer/speed_mode.dart`, `engine/libreshare_engine.dart`, `apps/libreshare_app/lib/screens/settings_screen.dart` | `unit/speed_mode_test.dart`, `integration/speed_mode_engine_test.dart`, `apps/libreshare_app/test/speed_mode_settings_test.dart` | 4 | done |
++| FR-13 | Native SHA-256 hashing via FFI (`libcrypto`/`bcrypt`) with seamless pure-Dart fallback. | `transfer/native_sha256.dart`, `transfer/hashing.dart` | `unit/native_sha256_test.dart`, `unit/hashing_isolates_native_test.dart`, `integration/native_sha256_transfer_test.dart` | 4 | done |
++| FR-14 | Speed regression gate enforcing throughput baselines (47-91 MiB/s secure, 65-147 MiB/s plain). | `tools/bench/gate.sh`, `tools/bench/benchmarks.csv` | `tools/bench/gate.sh` regression gate runs | 4 | done |
++| FR-19 | Direct origin server & candidate racing: ephemeral TLS self-signed certificates with SHA-256 cert pinning, staggered 250ms candidate race. | `nat/direct_origin_server.dart`, `connection/direct_connection.dart`, `connection/candidate_race.dart`, `share/share_link.dart` | `unit/nat/direct_origin_pin_test.dart`, `unit/nat/candidate_race_test.dart`, `unit/nat/link_d_pin_conformance_test.dart` | 5b | inc2-done |
++| FR-20 | IP address classification (table-driven global unicast, CGNAT, private, ULA) & RFC 5389 STUN binding reachability probe. | `nat/ip_classify.dart`, `nat/stun_client.dart`, `nat/reachability_probe_impl.dart` | `unit/nat/ip_classify_test.dart`, `unit/nat/stun_client_test.dart`, `unit/nat/reachability_probe_test.dart` | 5b | inc2-done |
++| FR-21 | Automated port mapping via UPnP-IGD, NAT-PMP, and PCP with hostile gateway SSRF protections, port collision retries, and unmap-on-exit leak prevention. | `nat/{ssdp,upnp_igd,nat_pmp,pcp,unified_port_mapper}.dart` | `unit/nat/fake_igd_gateway_test.dart`, `unit/nat/igd_hostile_test.dart`, `unit/nat/nat_pmp_test.dart`, `unit/nat/port_mapper_leak_test.dart` | 5b | inc2-done |
+ 
+ ## Non-functional requirements
+ 
+@@ -75,6 +81,10 @@
+ | REST endpoint contract (ApiServer, raw HTTP client, every route + error envelope + 426 + rate limit) | `conformance/api_conformance_test.dart` | 1 | inc1-done |
+ | 426 UPGRADE_REQUIRED on `/register` and `POST /sessions` (ApiServer) | `conformance/api_conformance_test.dart` | 1 | inc1-done |
+ | 426 on discovery datagrams / path-major handling | `unit/discovery_packet_test.dart` | 2 | planned |
++| Live wire schema validation across all DTOs and LSP-1 message definitions | `conformance/live_schema_conformance_test.dart` | 4 | done |
++| Windows reserved device names, ADS stream, and path sanitization semantics | `unit/windows_semantics_test.dart` | 4 | done |
++| Seeded fuzzing for frame decoders, sanitizer, and chunk-range arithmetic | `unit/protocol_fuzz_property_test.dart` | 4 | done |
++| Security threat model regressions (pinning, PIN brute-force lockout, log hygiene) | `security/threat_model_regression_test.dart` | 4 | done |
+ 
+ ## Inc 1 evidence
+ 

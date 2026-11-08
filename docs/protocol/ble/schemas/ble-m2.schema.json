@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://libreshare.org/schemas/ble-m2.schema.json",
+  "title": "BleM2",
+  "description": "LS-BLE/1 M2 Hello message from Peripheral to Central.",
+  "type": "object",
+  "required": ["type", "v", "epk", "n", "capEcho"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "m2"
+    },
+    "v": {
+      "type": "integer",
+      "const": 1
+    },
+    "epk": {
+      "type": "string",
+      "description": "Base64-encoded ephemeral X25519 public key."
+    },
+    "n": {
+      "type": "string",
+      "description": "Base64-encoded 16-byte random nonce."
+    },
+    "capEcho": {
+      "type": "integer",
+      "description": "Echoed peripheral capabilities bitmask."
+    }
+  },
+  "additionalProperties": false
+}

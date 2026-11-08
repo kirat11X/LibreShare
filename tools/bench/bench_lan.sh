@@ -44,9 +44,10 @@ fi
 SIZE_MIB=100
 LABEL="loopback-lan"
 BASE_PORT=53600
-CSV_FILE="$ROOT/tools/bench/benchmarks.csv"
+CSV_FILE="${LS_BENCH_CSV:-$ROOT/tools/bench/benchmarks.csv}"
 DO_PLAIN=false
 DO_SECURE=false
+SPEED_MODE="balanced"
 
 usage() {
   cat << EOF
@@ -62,7 +63,8 @@ Options:
   --1gib, --gib       Shortcut for --size-mib 1024
   --label <str>       Benchmark run label (default: loopback-lan)
   --port <N>          Base TCP port to start probing for free port (default: 53600)
-  --output, --csv <F> CSV output file (default: tools/bench/benchmarks.csv)
+  --speed <MODE>      Speed mode passed to 'ls send --speed': eco|balanced|turbo (default: balanced)
+  --output, --csv <F> CSV output file (default: $LS_BENCH_CSV or tools/bench/benchmarks.csv)
   -h, --help          Show this help message
 EOF
 }
@@ -98,6 +100,10 @@ while [[ $# -gt 0 ]]; do
       BASE_PORT="$2"
       shift 2
       ;;
+    --speed)
+      SPEED_MODE="$2"
+      shift 2
+      ;;
     --output|--csv)
       CSV_FILE="$2"
       shift 2
@@ -120,11 +126,19 @@ if [[ "$DO_PLAIN" == "false" && "$DO_SECURE" == "false" ]]; then
   DO_PLAIN=true
 fi
 
+case "$SPEED_MODE" in
+  eco|balanced|turbo) ;;
+  *)
+    echo "ERROR: --speed must be one of: eco, balanced, turbo (got: $SPEED_MODE)" >&2
+    exit 2
+    ;;
+esac
+
 # -----------------------------------------------------------------------------
 # Pre-flight: Precompile CLI snapshot dill if needed
 # -----------------------------------------------------------------------------
 LS_DILL="$ROOT/.toolchain/ls_snapshot.dill"
-if [[ ! -f "$LS_DILL" ]] || [[ "$ROOT/packages/libreshare_cli/bin/ls.dart" -nt "$LS_DILL" ]]; then
+if [[ ! -f "$LS_DILL" ]] || [[ -n "$(find "$ROOT/packages/libreshare_cli/bin" "$ROOT/packages/libreshare_cli/lib" "$ROOT/packages/libreshare_core/lib" -name '*.dart' -newer "$LS_DILL" -print -quit 2>/dev/null)" ]]; then
   mkdir -p "$ROOT/.toolchain"
   echo "==> Compiling CLI snapshot dill..."
   dart compile kernel "$ROOT/packages/libreshare_cli/bin/ls.dart" -o "$LS_DILL" >/dev/null
@@ -164,7 +178,12 @@ echo "    Generated $PAYLOAD_BYTES bytes at $PAYLOAD_FILE."
 # Prepare CSV output header if not present
 mkdir -p "$(dirname "$CSV_FILE")"
 if [[ ! -f "$CSV_FILE" ]]; then
-  echo "timestamp,label,profile,size_mib,duration_sec,speed_mib_s,cpu_percent" > "$CSV_FILE"
+  echo "timestamp,label,profile,size_mib,duration_sec,speed_mib_s,cpu_percent,mode" > "$CSV_FILE"
+elif ! head -n1 "$CSV_FILE" | grep -q ',mode$'; then
+  # Legacy 7-column CSV: only the header gains the mode column. Old rows are left as they are;
+  # gate.sh reads a row without a mode as balanced. Original kept in .toolchain/snap/.
+  sed -i '1s/$/,mode/' "$CSV_FILE"
+  echo "Added 'mode' column to the CSV header (legacy rows read as balanced)."
 fi
 
 # -----------------------------------------------------------------------------
@@ -203,6 +222,7 @@ run_benchmark_profile() {
     rx_log="$5"
     payload="$6"
     tx_log="$7"
+    speed="$8"
 
     if [[ "$profile" == "secure" ]]; then
       printf "y\n" | dart "$ls_dill" receive --port "$port" --dir "$rx_dir" --auto-accept --once > "$rx_log" 2>&1 &
@@ -225,13 +245,13 @@ run_benchmark_profile() {
 
     # Execute transfer
     if [[ "$profile" == "secure" ]]; then
-      printf "y\n" | dart "$ls_dill" send --to "127.0.0.1:$port" "$payload" > "$tx_log" 2>&1
+      printf "y\n" | dart "$ls_dill" send --speed "$speed" --to "127.0.0.1:$port" "$payload" > "$tx_log" 2>&1
     else
-      dart "$ls_dill" send --to "127.0.0.1:$port" --insecure-plaintext "$payload" > "$tx_log" 2>&1
+      dart "$ls_dill" send --speed "$speed" --to "127.0.0.1:$port" --insecure-plaintext "$payload" > "$tx_log" 2>&1
     fi
 
     wait "$rx_pid"
-  ' _ "$profile" "$LS_DILL" "$port" "$rx_dir" "$rx_log" "$PAYLOAD_FILE" "$tx_log"
+  ' _ "$profile" "$LS_DILL" "$port" "$rx_dir" "$rx_log" "$PAYLOAD_FILE" "$tx_log" "$SPEED_MODE"
 
   # Verify transfer success
   if ! grep -q "status=COMPLETED" "$tx_log"; then
@@ -296,6 +316,7 @@ run_benchmark_profile() {
   # Print report
   echo "Result:       PASS"
   echo "Profile:      $profile"
+  echo "Mode:         $SPEED_MODE"
   echo "Size:         $SIZE_MIB MiB"
   echo "Duration:     ${duration_sec}s"
   echo "Throughput:   ${speed_mib_s} MiB/s"
@@ -304,7 +325,7 @@ run_benchmark_profile() {
   echo "Leftovers:    0 .lspart* files found (Clean)"
 
   # Append to CSV
-  echo "$ts,$LABEL,$profile,$SIZE_MIB,$duration_sec,$speed_mib_s,$cpu_pct" >> "$CSV_FILE"
+  echo "$ts,$LABEL,$profile,$SIZE_MIB,$duration_sec,$speed_mib_s,$cpu_pct,$SPEED_MODE" >> "$CSV_FILE"
   echo "Appended result to $CSV_FILE"
 }
 

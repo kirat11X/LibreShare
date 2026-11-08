@@ -1,0 +1,58 @@
+--- a/docs/user/guide.md
++++ b/docs/user/guide.md
+@@ -30,11 +30,11 @@
+ 4. **Firewall Notice:** If your Linux system has an active firewall, allow LibreShare to communicate on your local network:
+    - On Fedora / RHEL (`firewalld`):
+      ```bash
+-     sudo firewall-cmd --permanent --add-port=53318-53327/tcp --add-port=53318/udp && sudo firewall-cmd --reload
++     sudo firewall-cmd --permanent --add-port=53318-53349/tcp --add-port=53318/udp && sudo firewall-cmd --reload
+      ```
+    - On Ubuntu / Debian (`ufw`):
+      ```bash
+-     sudo ufw allow 53318:53327/tcp && sudo ufw allow 53318/udp
++     sudo ufw allow 53318:53349/tcp && sudo ufw allow 53318/udp
+      ```
+ 
+ ### Windows (Zip Archive)
+@@ -196,7 +196,7 @@
+ [SCREENSHOT: Add device screen showing By IP address and By link or QR code tabs]
+ 
+ ### 4. Firewall Blocking LibreShare on PC
+-- **The Issue:** Your PC's firewall may be blocking incoming connections on LibreShare's listening ports (UDP 53318 and TCP ports 53318–53327).
++- **The Issue:** Your PC's firewall may be blocking incoming connections on LibreShare's listening ports (UDP 53318 and TCP ports 53318–53349, including direct origin range 53330–53349).
+ - **The Solution:**
+   - **Windows:** Open Windows Defender Firewall settings, find LibreShare, and verify that it has checkmarks allowed for private networks.
+   - **Linux:** In LibreShare, navigate to **Settings** -> expand **Can't see devices?**, copy the suggested firewall command for `ufw` or `firewalld`, and run it in your terminal. You can also tap **Scan the network now** to re-test network visibility.
+--- a/packages/libreshare_cli/lib/ls_cli.dart
++++ b/packages/libreshare_cli/lib/ls_cli.dart
+@@ -579,6 +579,16 @@
+       help: 'origin server port (0 = ephemeral)',
+     )
+     ..addOption('zrok-token', help: 'account token for zrok provider')
++    ..addFlag(
++      'hide-ip',
++      negatable: false,
++      help: 'omit direct candidates and route through tunnel only',
++    )
++    ..addFlag(
++      'port-map',
++      negatable: false,
++      help: 'request UPnP/NAT-PMP port mapping on local gateway (default off)',
++    )
+     ..addOption('alias');
+   _addProfileOptions(linkParser);
+ 
+@@ -1856,6 +1866,13 @@
+   final fpPart = fp != null && fp.isNotEmpty
+       ? '&fp=${fp.substring(0, min(16, fp.length)).toUpperCase()}'
+       : '';
++  final hideIp = r['hide-ip'] as bool? ?? false;
++  if (!hideIp) {
++    io.out('DISCLOSURE: Direct internet paths include your public IP address. Pass --hide-ip for tunnel only.');
++  } else {
++    io.out('HIDE-IP: Direct candidates omitted. Tunnel-only routing active.');
++  }
++
+   final shareUrl =
+       'https://libreshare.github.io/r#v=1&h=$host&t=$tokenB64&k=${b64urlEncode(rootKey)}&m=$maxReceivers&e=$expEpoch$aliasPart$fpPart';
+   final shareLink = ShareLink.parse(shareUrl, allowDeveloperHosts: true);

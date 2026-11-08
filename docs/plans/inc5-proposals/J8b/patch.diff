@@ -1,0 +1,42 @@
+--- a/tools/docker/e2e.sh
++++ b/tools/docker/e2e.sh
+@@ -553,22 +553,34 @@
+ 
+ # Local transfer attempt over cut networks must fail
+ rc_fail=0
+-out_fail=$("$LS" send --to "$BOB_IP:$PORT" --timeout 2 /tmp/e2e-m.bin 2>&1) || rc_fail=$?
++out_fail=$("$LS" send --to "$BOB_IP:$PORT" /tmp/e2e-m.bin 2>&1) || rc_fail=$?
++note "Cut local send output (expected non-zero): exit=$rc_fail output=$(echo "$out_fail" | tr '\n' ' ')"
+ check "transfer over cut local networks fails" test "$rc_fail" -ne 0
+ 
+ # Transfer over fallback network (inet_net) must succeed
+-rc=0; out=$("$LS" send --to "$INET_BOB_IP:$PORT" /tmp/e2e-m.bin 2>&1) || rc=$?
++rc=0; out=$("$LS" send --to "$INET_BOB_IP:$PORT" --insecure-tofu /tmp/e2e-m.bin 2>&1) || rc=$?
++if [[ "$rc" -ne 0 ]]; then
++  note "Fallback over inet_net failed: exit=$rc output=$(echo "$out" | tr '\n' ' ')"
++fi
+ check "fallback over inet_net completes (exit 0, COMPLETED)" test "$rc" -eq 0 -a -n "$(grep -x COMPLETED <<<"$out" || true)"
+ 
+-# Verify link sharing CLI loopback on tester
+-link_out=$("$LS" link /tmp/e2e-m.bin --allow-dev 2>&1) || true
+-check "ls link creates share link" test -n "$(grep -o 'https://[^ ]*' <<<"$link_out" || true)"
++# Verify link sharing CLI on tester using fake tunnel provider
++"$LS" link /tmp/e2e-m.bin --provider fake --expires 15m >/tmp/link.log 2>&1 &
++link_pid=$!
++wait_for "link generated" 10 grep -q '^LINK ' /tmp/link.log || true
++link_url=$(grep -m1 '^LINK ' /tmp/link.log | awk '{print $2}' || true)
++note "Generated share link: ${link_url:-NONE}"
++check "ls link creates share link" test -n "$link_url"
++kill "$link_pid" 2>/dev/null || true
++wait "$link_pid" 2>/dev/null || true
++rm -f /tmp/link.log
+ 
+ # Restore interfaces for subsequent steps
+ if [[ -x /usr/local/bin/cut_wifi.sh ]]; then
+   /usr/local/bin/cut_wifi.sh eth0 restore
+   /usr/local/bin/cut_wifi.sh eth1 restore
+ fi
++wait_for "bob reachable after restoring interfaces" 10 peer_up "$BOB_IP" || true
+ rm -f /tmp/e2e-m.bin
+ 
+ # ==================================================================================================

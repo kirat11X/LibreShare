@@ -62,6 +62,15 @@ class PeerRegistry implements PeerSink {
   final Map<String, Uint8List> _certs = {};
   static const int _maxCertMemory = 1024;
 
+  // Per-source cap on top of the global one, so that a flood of distinct peers
+  // from one address evicts only its own certificates (R4d). Bookkeeping is
+  // bounded by [_certs]: one source entry per stored certificate, one counter
+  // per source that holds at least one.
+  static const int maxCertsPerSource = 64;
+  static const String _unknownSource = '';
+  final Map<String, String> _certSource = {};
+  final Map<String, int> _certSourceCount = {};
+
   final StreamController<List<DiscoveredDevice>> _devices =
       StreamController<List<DiscoveredDevice>>.broadcast();
   final StreamController<DiscoveryEvent> _events =
@@ -211,14 +220,45 @@ class PeerRegistry implements PeerSink {
     try {
       final cert = parseCertificate(certDer, verifySelfSignature: true);
       final fp = cert.fingerprint.toUpperCase();
-      _certs.remove(fp);
+      _dropCert(fp);
+      final source = _sourceOf(fp, cert.subjectCn);
       _certs[fp] = Uint8List.fromList(certDer);
+      _certSource[fp] = source;
+      _certSourceCount[source] = (_certSourceCount[source] ?? 0) + 1;
+      while ((_certSourceCount[source] ?? 0) > maxCertsPerSource) {
+        _dropCert(_certs.keys.firstWhere((k) => _certSource[k] == source));
+      }
       while (_certs.length > _maxCertMemory) {
-        _certs.remove(_certs.keys.first);
+        _dropCert(_certs.keys.first);
       }
       return true;
     } on Object {
       return false;
+    }
+  }
+
+  // Address of the listed peer that IS the certificate's owner: the entry whose
+  // deviceId equals the certificate's subject CN and whose fingerprint is [fp].
+  // Entries that merely claim [fp] under another deviceId do not count (a
+  // fingerprint is public, so a claim must not steer the attribution). The
+  // shared bucket is used when no such entry is listed.
+  String _sourceOf(String fp, String? subjectCn) {
+    if (subjectCn == null) return _unknownSource;
+    final e = _peers[subjectCn];
+    if (e == null || e.device.info.fingerprint.toUpperCase() != fp) {
+      return _unknownSource;
+    }
+    return e.device.address;
+  }
+
+  void _dropCert(String fp) {
+    if (_certs.remove(fp) == null) return;
+    final source = _certSource.remove(fp);
+    final n = (_certSourceCount[source] ?? 1) - 1;
+    if (n <= 0) {
+      _certSourceCount.remove(source);
+    } else {
+      _certSourceCount[source!] = n;
     }
   }
 

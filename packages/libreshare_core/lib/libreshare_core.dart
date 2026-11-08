@@ -13,6 +13,7 @@ export 'src/transfer/chunker.dart';
 export 'src/server/incoming_transfer_handler.dart';
 export 'src/client/peer_client.dart';
 export 'src/transfer/hashing.dart';
+export 'src/transfer/speed_mode.dart';
 export 'src/transfer/manifest.dart';
 export 'src/transfer/file_sender.dart';
 export 'src/transfer/filename_sanitizer.dart';
@@ -83,3 +84,44 @@ export 'src/storage/session_record.dart';
 export 'src/storage/session_store.dart';
 export 'src/transfer/idle_timeout_manager.dart';
 export 'src/transfer/receiver_adoption_helper.dart';
+
+export 'src/security/tunnel_crypto.dart';
+
+export 'src/share/share_link.dart';
+
+export 'src/security/secret_redactor.dart';
+
+export 'src/tunnel/tunnel_provider.dart';
+export 'src/model/origin_candidate.dart';
+export 'src/model/share_models.dart';
+
+export 'src/tunnel/fake_tunnel_provider.dart';
+export 'src/server/tunnel_origin_server.dart';
+
+export 'src/share/link_share.dart';
+export 'src/share/share_store.dart';
+
+export 'src/connection/origin_pull_connection.dart';
+export 'src/connection/tunnel_connection.dart';
+
+export 'src/tunnel/binary_installer.dart';
+export 'src/tunnel/cloudflared_provider.dart';
+export 'src/tunnel/cloudflared_versions.dart';
+export 'src/tunnel/manual_url_provider.dart';
+export 'src/tunnel/process_supervisor.dart';
+export 'src/tunnel/zrok_provider.dart';
+export 'src/rendezvous/records.dart';
+export 'src/rendezvous/rendezvous_backend.dart';
+export 'src/rendezvous/channel_deriver.dart';
+export 'src/rendezvous/envelope_codec.dart';
+export 'src/rendezvous/rendezvous_service.dart';
+export 'src/rendezvous/rendezvous_candidate_source.dart';
+export 'src/rendezvous/replay_guard.dart';
+export 'src/rendezvous/in_memory_relay.dart';
+export 'src/rendezvous/bip340.dart';
+export 'src/rendezvous/nip01.dart';
+export 'src/rendezvous/loopback_nostr_relay.dart';
+export 'src/rendezvous/nostr_backend.dart';
+export 'src/rendezvous/presence_cache.dart';
+export 'src/rendezvous/rendezvous_service_impl.dart';
+export 'src/rendezvous/ntfy_backend.dart';

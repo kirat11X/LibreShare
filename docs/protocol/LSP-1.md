@@ -23,6 +23,9 @@ LSP/1 is the wire protocol between two LibreShare instances: UDP/mDNS discovery,
 | **[I3]** | Increment 3 (LSP/1.1, the secure profile): TLS 1.3 with a pinned server certificate, signed client proof (`X-LS-Auth`), fingerprints, SAS commit/reveal and TOFU, PIN, rate limits, consent prompt, Contacts-only visibility, QR pairing, `bye` datagram, sanitizer hardening, corruption handling. |
 | **[I4]** | Increment 4: connection ladder, durable resume bitmap, `/state`-driven resync across channels. |
 | **[I5]** | Increment 5: tunnel origin API, tunnel crypto, `tunnelOffer`. |
+| **[I5b]** | Increment 5b: Direct origin server & candidate racing (staggered 250ms race across IPv6, mapped IPv4, and tunnels), automated port mapping (UPnP-IGD, NAT-PMP, PCP), and STUN IP classification. (See `docs/plans/inc5b.md`). |
+| **[I6]** | Increment 6 (LSP-R1): Free internet rendezvous layer utilizing decentralized Nostr relays, ntfy backup transport, BIP-340 Schnorr signatures, NIP-01 canonical encoding, and pairing SAS. (See `docs/protocol/rendezvous/LSP-R1.md`). |
+| **[I7]** | Increment 7 (LS-BLE/1): Bluetooth Low Energy discovery, 10-minute rotating EIDs, encrypted GATT handshake, and Wi-Fi hotspot ad-hoc connection policy engine. (See `docs/protocol/ble/`). |
 
 Rules without a marker apply from the increment that first touches the feature. Unmarked data formats (JSON members, status codes) are fixed in Increment 1 so that later increments only add behaviour.
 
@@ -235,7 +238,7 @@ All DTOs are defined by the schemas; the Dart classes in `lib/src/model/` serial
 
 Notes:
 
-- `TransferStatus` has exactly four values, `PENDING`, `IN_PROGRESS`, `COMPLETED`, `FAILED`. Failure causes are in `failureReason` (`REJECTED`, `TIMEOUT`, `CANCELLED`, `VERIFY_FAILED`, `NO_CONNECTION`, `DISK_FULL`, `PROTOCOL_ERROR`); a `FAILED` status SHOULD carry a non-null `failureReason`.
+- `TransferStatus` has exactly four values, `PENDING`, `IN_PROGRESS`, `COMPLETED`, `FAILED`. Failure causes are in `failureReason` (`REJECTED`, `TIMEOUT`, `CANCELLED`, `VERIFY_FAILED`, `NO_CONNECTION`, `DISK_FULL`, `PROTOCOL_ERROR`, `STORAGE_UNUSABLE`); a `FAILED` status SHOULD carry a non-null `failureReason`.
 - `DeviceInfo.port` is the TCP port of the sender's own API listener, **as actually bound** (after the port fallback of 4.1; `GET /info` MUST NOT return the requested port when another was bound) [I2]; a send-only client (the Increment 1 `ls send` / `ls info`, which start no server, or an engine whose Receive mode is Off) reports `0`. Discovery announcements ([I2]) carry a real port (`>= 1`), except the send-only probe of 4.2 rule 8, which carries `0` together with `announce:true` (`discovery-announce.schema.json` enforces both).
 - `tunnelOffer` travels only inside the authenticated channel so the tunnel provider never learns `keyB64`.
 - The whole-file SHA-256 is computed in a background isolate, pipelined with sending. For files **larger than 2 GiB** the manifest carries `sha256: null` and the sender supplies the value in the body of `POST .../complete` once hashing finishes. If both manifest and body carry a value they MUST be equal; a receiver rejects a disagreement with 400 BAD_REQUEST. If neither carries one -> 400 BAD_REQUEST.
@@ -339,7 +342,7 @@ Every non-2xx response has `Content-Type: application/json` and this body (schem
 | `INTERNAL` | 500 | yes | Unexpected receiver error (also the client-side fallback for unknown codes). | [I1] |
 | `INSUFFICIENT_STORAGE` | 507 | no | Free space below `totalSize + 64 MiB`, or the download folder is missing and cannot be created, or is not writable. | [I3] |
 
-Recommended client mapping to `FailureReason`: `CANCELLED` -> `CANCELLED`; `VERIFY_FAILED` -> `VERIFY_FAILED`; `INSUFFICIENT_STORAGE` -> `DISK_FULL`; channel exhaustion -> `NO_CONNECTION`; any other non-retryable error -> `PROTOCOL_ERROR`. `REJECTED` and `TIMEOUT` arrive as `SessionStatus.failureReason`, not as HTTP errors. **[I3]** `AUTH_INVALID` maps to `PROTOCOL_ERROR` unless the client has a better local classification; a pin mismatch (`PeerKeyChanged`) or a legacy peer (`InsecurePeer`) is detected by the sender before any request and is not a wire error.
+Recommended client mapping to `FailureReason`: `CANCELLED` -> `CANCELLED`; `VERIFY_FAILED` -> `VERIFY_FAILED`; `INSUFFICIENT_STORAGE` -> `DISK_FULL`, except that an `INSUFFICIENT_STORAGE` whose message says the download folder is not usable maps to `STORAGE_UNUSABLE` (a sender-local value; a receiver never sends it); channel exhaustion -> `NO_CONNECTION`; any other non-retryable error -> `PROTOCOL_ERROR`. `REJECTED` and `TIMEOUT` arrive as `SessionStatus.failureReason`, not as HTTP errors. **[I3]** `AUTH_INVALID` maps to `PROTOCOL_ERROR` unless the client has a better local classification; a pin mismatch (`PeerKeyChanged`) or a legacy peer (`InsecurePeer`) is detected by the sender before any request and is not a wire error.
 
 #### 4.3.6 Identity proof: `X-LS-Auth`  **[I3]**
 
@@ -435,20 +438,77 @@ On a Contacts-only receiver the gate of 4.3.4 looks at the certificate of the he
 
 ### 4.5 Tunnel origin API  **[I5]**
 
-The sender runs an HTTP origin bound to `127.0.0.1:<random>`; it is reachable only through the tunnel provider and serves nothing outside `/t/`. Plain HTTP between tunnel and origin is acceptable because the payload is already AES-256-GCM ciphertext.
+The sender runs an HTTP origin bound to `127.0.0.1:<random>`; it is reachable only through the tunnel provider and serves nothing outside `/t/`. Plain HTTP between tunnel and origin is acceptable because every payload is already AEAD ciphertext (4.5.1). The ordering of the ladder and when the tunnel is used (never while a local tier is healthy, NFR-06) is specified in the build spec section 6. This section supersedes the Increment-1 draft (deterministic nonce, `#k=&s=&fp=` link) per design 04 D5. Token: 128-bit random, constant-time compare; it expires at `COMPLETED`, after 30 min idle or 24 h, and is revoked after the final ack (afterwards every route answers 401/410). The link fragment (`k`, and any other fragment field) never leaves the client and MUST NEVER be logged.
 
-| Route | Response |
-|---|---|
-| `GET /t/{token}/manifest` | AES-GCM sealed manifest |
-| `GET /t/{token}/f/{fid}/c/{idx}` | `nonce(12) || ciphertext || tag(16)` |
-| `POST /t/{token}/ack` | sealed `{fid,idx}` or `{final:true,verified:true}` |
-| `GET /t/{token}/healthz` | `204` (DNS-race detection; polled every 2 s up to 45 s) |
+#### 4.5.1 End-to-End Encryption Specification
 
-- **Link:** `https://<host>/t/<token>#k=<key b64url>&s=<sessionId>&fp=<16 hex>`. The fragment (`k`, `s`, `fp`) never leaves the client and MUST NEVER be logged.
-- **Token:** 128-bit random, constant-time compare. Expires at `COMPLETED`, after 30 min idle or 24 h, and is revoked after the final ack; afterwards every route answers 401.
-- **Crypto:** AES-256-GCM with a per-session 32-byte key. Nonce = 4-byte `fileIndex` || 8-byte `chunkIndex`; the manifest nonce is `0xFFFFFFFF || 0`. AAD = `sessionId || fileId || idx`.
-- **Request shape:** receiver pulls GETs of at most one 4 MiB chunk, at most 4 in flight, no SSE (provider limits: 200 in-flight, 429/1015 -> back off, then switch provider).
-- The ordering of the ladder and when the tunnel is used (never while a local tier is healthy, NFR-06) is specified in the build spec section 6.
+All tunnel transfers use end-to-end AEAD encryption (AES-256-GCM) with key separation via HKDF-SHA256 (RFC 5869).
+
+### 1. Key Derivation
+- Sender generates a 256-bit random root key $k \leftarrow \text{Random.secure()}$.
+- $k$ is transmitted exclusively within the link fragment (e.g. `https://host/r#...&k=...` or `libreshare://r?...&k=...`) and is never sent across HTTP request paths, query strings, or headers.
+- Subkeys are expanded under the salt `"LSP1-TUN-v1"`:
+  ```
+  prk      = HKDF-Extract(salt = "LSP1-TUN-v1", ikm = k)
+  shareId  = HKDF-Expand(prk, "sid", 16)           // derived identifier (UUID format)
+  kMan     = HKDF-Expand(prk, "manifest", 32)      // sealed manifest encryption
+  kData    = HKDF-Expand(prk, "data", 32)          // chunk payload encryption
+  kAck     = HKDF-Expand(prk, "ack", 32)           // receiver -> sender ack encryption
+  ```
+
+### 2. Random 96-Bit Nonces & Wire Framing
+Every sealed payload on the wire consists of:
+$$\text{wire} = \text{nonce}_{12} \parallel \text{ciphertext} \parallel \text{tag}_{16}$$
+- A fresh, uniformly random 12-byte nonce is drawn for every seal.
+- Nonces are never deterministic or counter-based.
+- Seal cap: Maximum $2^{24}$ seals per key $k$; exceeding this budget throws `sealCapReached`.
+
+### 3. Canonical Associated Authenticated Data (AAD)
+The AAD strictly binds message purpose, share ID, file position, and chunk length:
+```
+AAD = "LSP1" (4 ASCII)
+      || purpose (1 byte: 1=manifest, 2=chunk, 3=ack)
+      || shareId (16 bytes)
+      || uint32_be(fileIndex)
+      || uint64_be(chunkIndex)
+      || uint64_be(plaintextLen)
+```
+- Manifest uses `fileIndex = 0xFFFFFFFF`, `chunkIndex = 0`.
+- Final ack uses `fileIndex = 0xFFFFFFFF`, `chunkIndex = 0`.
+
+### 4. Claim Header & Short Authentication String (SAS)
+- The receiver generates a 128-bit random claim string and passes it via `X-LS-Claim`.
+- Both parties can display a 6-digit SAS code:
+  $$\text{SAS} = \text{uint32\_be}(\text{HKDF-Expand}(prk, \text{"sas"} \parallel \text{claim}, 4)) \pmod{10^6}$$
+
+---
+
+#### 4.5.2 Origin Route Table & Semantics
+
+| Route | Method | Purpose | Response / Status |
+|---|---|---|---|
+| `/t/{token}` | `GET` | Static HTML landing page (for browser/bot clicks, no side effects) | `200 OK`, `text/html; charset=utf-8` |
+| `/t/{token}/manifest` | `GET` | Sealed manifest payload | `200 OK`, `application/octet-stream`<br>`401` (missing/invalid claim)<br>`409` (claim conflict)<br>`410` (expired/revoked) |
+| `/t/{token}/f/{fid}/c/{i}` | `GET` | Sealed chunk payload (chunk $i$ of file $fid$) | `200 OK`, `application/octet-stream`<br>`429` (concurrency limit reached)<br>`410` (budget exceeded/revoked) |
+| `/t/{token}/ack` | `POST` | Sealed chunk ack or verified final ack | `200 OK` / `204 No Content`<br>`400` / `401` (invalid ack) |
+| `/t/{token}/healthz` | `GET` | `204 No Content` (DNS-race detection after the tunnel starts; polled every 2 s for up to 45 s; no token side effect) | `204` |
+
+### Required Security Headers on All Responses:
+- `Cache-Control: no-store`
+- `Referrer-Policy: no-referrer`
+- `X-Content-Type-Options: nosniff`
+
+---
+
+#### 4.5.3 Concurrency & Protection Limits
+- Maximum 8 concurrent in-flight requests per token.
+- Maximum 32 total concurrent in-flight requests across all origin tokens.
+- 60-second write timeout per chunk stream.
+- Hard byte budget: $2 \times \text{totalSize} \times \text{maxReceivers}$. Exceeding budget revokes the share immediately ($410\text{ Gone}$).
+
+#### 4.5.4 Protocol Extensions & Out-of-Band Channels
+- **Internet Rendezvous Protocol (LSP-R1):** Full specification for free out-of-band signaling and presence discovery across the internet using Nostr relays, ntfy fallback, discrete padding bucketing (512, 1024, 2048, 4096 bytes), BIP-340 signatures, and SAS confirmation is documented in [LSP-R1](file:///home/kirat/coding/Software%20Engineering%20LibreShare/docs/protocol/rendezvous/LSP-R1.md) with schemas located in `docs/protocol/rendezvous/schemas/`.
+- **Bluetooth Low Energy & Hotspot Protocol (LS-BLE/1):** Specifications for offline proximity discovery via rotating ephemeral EID beacons, GATT-based encrypted mutual handshake, and ad-hoc Wi-Fi hotspot role election are located in `docs/protocol/ble/` with schemas in `docs/protocol/ble/schemas/`.
 
 ### 4.6 Versioning and 426
 
@@ -578,7 +638,7 @@ libreshare://pair?v=1&s=<S, 43 chars b64url>&id=<deviceId>&fp=<64 hex>&n=<alias>
 2. B opens TLS to `ip:port` with the `fp` of the QR pinned (a different certificate aborts the connection), chooses `nB` (16 random bytes) and sends `POST /pair` (4.3.4) with `mac = HMAC-SHA256(S, "LSP1-PAIR-REQ" 0x00 || fpB || fpA || nB)` and its `X-LS-Auth` proof.
 3. A verifies, shows alias and platform of B with Accept / Decline (no SAS: `S` authenticates B) and holds the request for at most 125 s (`kPairTimeout`).
 4. On Accept A answers `PairResponse{accepted:true, responder, nonce: nA, mac}` with `mac = HMAC-SHA256(S, "LSP1-PAIR-ACK" 0x00 || fpA || fpB || nA || nB)`; B verifies it. On Decline or timeout A answers `accepted:false` without `nonce` and `mac`.
-5. Both sides pin each other as trusted contacts (fingerprint, deviceId, alias) and derive `K_pair = HKDF-SHA256(ikm=S, salt=nA || nB, info="LSP-R1 pair" || min(fpA,fpB) || max(fpA,fpB), L=32)`, with the fingerprints as ASCII hex as in 5.1. `K_pair` never travels, is stored in the secret store as `kpair/<deviceId>` (absent for contacts made by SAS), and `S` is erased. Increment 6 reuses `K_pair`; the label `LSP-R1 pair` is shared with its rendezvous design.
+5. Both sides pin each other as trusted contacts (fingerprint, deviceId, alias) and derive `K_pair = HKDF-SHA256(ikm=S, salt=nA || nB, info="LSP-R1 pair" || min(fpA,fpB) || max(fpA,fpB), L=32)`, with the fingerprints as ASCII hex as in 5.1. `K_pair` never travels, is stored in the secret store as `kpair/<deviceId>` (absent for contacts made by SAS), and `S` is erased. Increment 6 reuses `K_pair`; the label `LSP-R1 pair` is shared with its rendezvous design. For internet rendezvous signaling and presence over Nostr relays using $K_\text{pair}$, see [LSP-R1](rendezvous/LSP-R1.md).
 
 ### 5.4 Contacts-only visibility  **[I3]**
 

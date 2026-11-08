@@ -32,3 +32,13 @@ Residual of the fallback: a victim whose cert is learned while an attacker alone
 - F3: the shared unknown bucket (64 slots) can be flushed (certs learned before the peer is listed).
 - F4: a rotated certificate leaves the old one stored until evicted.
 - F5: a stale address label stays after a peer changes address, until the cert is relearned.
+
+## Round 3 (F6/F7 fix), 2026-11-07 15:15-15:58
+Change: `_sourceOf(fp, subjectCn)`: a cert is attributed to `_peers[subjectCn]` only if that entry exists and its fingerprint equals the cert's; otherwise the unknown bucket. Forged claimants (other deviceIds) are ignored; O(1), no new maps (all bookkeeping still <= 1024). F8 (relabel on remove/address change) not done: not cheap in this design, stays a known limit. Clone re-synced to the current real peer_registry.dart + old patch, then edited.
+Results (clone, under flock, rc captured separately):
+- analyze --fatal-infos lib file rc=0; format --set-exit-if-changed rc=0.
+- P6 file rc=0 (+1).
+- r2 file rc=1, +7 -3: R2-A2, R2-B4, R2-C3 fail ONLY on `expect(label, '')`; actual label is '10.1.0.1' (the victim's own address, i.e. better than the shared bucket). The attack tests (A1, B2, C2, A3...) pass. These assertions contradict F7; tests not touched, verifier/tester must flip them.
+- Tester file 3x rc=0, rc=0, rc=0 (+7 each).
+- Registry/discovery files rc=0.
+- Not run this round (not requested): full core suite, CLI suite, probes file.

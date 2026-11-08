@@ -40,6 +40,21 @@ void _ensureTestClipboard() {
   } catch (_) {}
 }
 
+bool _isFolderWritable(String path) {
+  try {
+    final dir = Directory(path);
+    dir.createSync(recursive: true);
+    final probe = File(
+      '${dir.path}${Platform.pathSeparator}.lsprobe-${DateTime.now().microsecondsSinceEpoch}',
+    );
+    probe.createSync(exclusive: true);
+    probe.deleteSync();
+    return true;
+  } on Object {
+    return false;
+  }
+}
+
 /// Settings (spec section 9, screen 7 + design 01 section 5.1).
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -194,6 +209,18 @@ class SettingsScreen extends ConsumerWidget {
                             .read(filePickerServiceProvider)
                             .pickDirectory();
                         if (picked != null) {
+                          if (!_isFolderWritable(picked)) {
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    tr('settings.folderUnwritable'),
+                                  ),
+                                ),
+                              );
+                            }
+                            return;
+                          }
                           await ref
                               .read(settingsProvider.notifier)
                               .setDownloadDir(picked);
@@ -216,6 +243,44 @@ class SettingsScreen extends ConsumerWidget {
                         },
                       ),
                     ],
+                  ],
+                ),
+              ),
+              section(tr('settings.speed')),
+              Card(
+                child: Column(
+                  children: [
+                    for (final (mode, title, help) in [
+                      (
+                        SpeedMode.eco,
+                        tr('settings.speedEco'),
+                        tr('settings.speedEcoHelp'),
+                      ),
+                      (
+                        SpeedMode.balanced,
+                        tr('settings.speedBalanced'),
+                        tr('settings.speedBalancedHelp'),
+                      ),
+                      (
+                        SpeedMode.turbo,
+                        tr('settings.speedTurbo'),
+                        tr('settings.speedTurboHelp'),
+                      ),
+                    ])
+                      ListTile(
+                        key: Key('speed_mode_${mode.name}'),
+                        selected: settings.speedMode == mode,
+                        leading: Icon(
+                          settings.speedMode == mode
+                              ? Icons.radio_button_checked
+                              : Icons.radio_button_unchecked,
+                        ),
+                        title: Text(title),
+                        subtitle: Text(help),
+                        onTap: () => ref
+                            .read(settingsProvider.notifier)
+                            .setSpeedMode(mode),
+                      ),
                   ],
                 ),
               ),

@@ -1,5 +1,5 @@
---- packages/libreshare_core/lib/src/share/share_link.dart	1970-01-01 05:30:00.000000000 +0530
-+++ .toolchain/scratch/inc5-h2-share-link/clone/packages/libreshare_core/lib/src/share/share_link.dart	1970-01-01 05:30:00.000000000 +0530
+--- a/packages/libreshare_core/lib/src/share/share_link.dart	1970-01-01 05:30:00.000000000 +0530
++++ b/packages/libreshare_core/lib/src/share/share_link.dart	1970-01-01 05:30:00.000000000 +0530
 @@ -0,0 +1,395 @@
 +import 'dart:convert';
 +import 'dart:io';

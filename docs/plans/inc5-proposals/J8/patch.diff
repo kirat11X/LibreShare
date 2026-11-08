@@ -1,0 +1,114 @@
+--- a/tools/docker/compose.yaml
++++ b/tools/docker/compose.yaml
+@@ -31,6 +31,8 @@
+         ipv4_address: 172.28.5.240
+       wifi_net:
+         ipv4_address: 172.28.6.240
++      inet_net:
++        ipv4_address: 172.28.7.240
+ 
+   bob:
+     <<: *ls
+@@ -43,6 +45,8 @@
+         ipv4_address: 172.28.5.250
+       wifi_net:
+         ipv4_address: 172.28.6.250
++      inet_net:
++        ipv4_address: 172.28.7.250
+ 
+   carol:
+     <<: *ls
+@@ -88,6 +92,8 @@
+       CAROL_IP: 172.28.5.230
+       DAVE_IP: 172.28.5.220
+       LEGACY_IP: 172.28.5.210
++      INET_ALICE_IP: 172.28.7.240
++      INET_BOB_IP: 172.28.7.250
+       BENCH_MIB: "${BENCH_MIB:-1024}"
+     volumes:
+       - alice_data:/alice-data:ro
+@@ -99,6 +105,8 @@
+         ipv4_address: 172.28.5.10
+       wifi_net:
+         ipv4_address: 172.28.6.10
++      inet_net:
++        ipv4_address: 172.28.7.10
+ 
+ networks:
+   lan_net:
+@@ -113,6 +121,12 @@
+       config:
+         - subnet: 172.28.6.0/24
+           gateway: 172.28.6.1
++  inet_net:
++    driver: bridge
++    ipam:
++      config:
++        - subnet: 172.28.7.0/24
++          gateway: 172.28.7.1
+ 
+ volumes:
+   alice_data:
+--- a/tools/docker/Dockerfile
++++ b/tools/docker/Dockerfile
+@@ -51,7 +51,7 @@
+ COPY --from=build /out/ls /usr/local/bin/libreshare
+ 
+ # Last layers: editing a test script does not invalidate the (slow) compile above.
+-COPY tools/docker/e2e.sh tools/docker/alice.sh tools/docker/bob.sh tools/docker/carol.sh tools/docker/dave.sh tools/docker/legacy.sh /usr/local/bin/
++COPY tools/docker/e2e.sh tools/docker/alice.sh tools/docker/bob.sh tools/docker/carol.sh tools/docker/dave.sh tools/docker/legacy.sh tools/docker/cut_wifi.sh /usr/local/bin/
+ RUN chmod 0755 /usr/local/bin/*.sh
+ 
+ USER libreshare
+--- a/tools/docker/Dockerfile.dockerignore
++++ b/tools/docker/Dockerfile.dockerignore
+@@ -12,6 +12,7 @@
+ !/tools/docker/carol.sh
+ !/tools/docker/dave.sh
+ !/tools/docker/legacy.sh
++!/tools/docker/cut_wifi.sh
+ 
+ # ... minus build products and test code inside packages/
+ **/.dart_tool
+--- a/tools/docker/e2e.sh
++++ b/tools/docker/e2e.sh
+@@ -539,12 +539,36 @@
+ rm -f /tmp/e2e-l.bin
+ 
+ # ==================================================================================================
+-step "m) WiFi cut at 40% -> LAN fallback"
++step "m) both local nets cut (WiFi + LAN) -> inet_net fallback & link transfer"
+ WIFI_BOB_IP="${WIFI_BOB_IP:-172.28.6.250}"
++INET_BOB_IP="${INET_BOB_IP:-172.28.7.250}"
+ dd if=/dev/urandom of=/tmp/e2e-m.bin bs=1M count=10 status=none
+ sha_m=$(sha256sum /tmp/e2e-m.bin | awk '{print $1}')
+-rc=0; out=$("$LS" send --to "$BOB_IP:$PORT" /tmp/e2e-m.bin 2>&1) || rc=$?
+-check "WiFi cut fallback to LAN completes (exit 0, COMPLETED)" test "$rc" -eq 0 -a -n "$(grep -x COMPLETED <<<"$out" || true)"
++
++# Cut both local network interfaces (LAN on eth0, WiFi on eth1)
++if [[ -x /usr/local/bin/cut_wifi.sh ]]; then
++  /usr/local/bin/cut_wifi.sh eth0 cut
++  /usr/local/bin/cut_wifi.sh eth1 cut
++fi
++
++# Local transfer attempt over cut networks must fail
++rc_fail=0
++out_fail=$("$LS" send --to "$BOB_IP:$PORT" --timeout 2 /tmp/e2e-m.bin 2>&1) || rc_fail=$?
++check "transfer over cut local networks fails" test "$rc_fail" -ne 0
++
++# Transfer over fallback network (inet_net) must succeed
++rc=0; out=$("$LS" send --to "$INET_BOB_IP:$PORT" /tmp/e2e-m.bin 2>&1) || rc=$?
++check "fallback over inet_net completes (exit 0, COMPLETED)" test "$rc" -eq 0 -a -n "$(grep -x COMPLETED <<<"$out" || true)"
++
++# Verify link sharing CLI loopback on tester
++link_out=$("$LS" link /tmp/e2e-m.bin --allow-dev 2>&1) || true
++check "ls link creates share link" test -n "$(grep -o 'https://[^ ]*' <<<"$link_out" || true)"
++
++# Restore interfaces for subsequent steps
++if [[ -x /usr/local/bin/cut_wifi.sh ]]; then
++  /usr/local/bin/cut_wifi.sh eth0 restore
++  /usr/local/bin/cut_wifi.sh eth1 restore
++fi
+ rm -f /tmp/e2e-m.bin
+ 
+ # ==================================================================================================

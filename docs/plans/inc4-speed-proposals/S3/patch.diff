@@ -1,0 +1,352 @@
+--- a/packages/libreshare_core/lib/src/engine/libreshare_engine.dart
++++ b/packages/libreshare_core/lib/src/engine/libreshare_engine.dart
+@@ -55,6 +55,7 @@
+ import '../transfer/file_receiver.dart';
+ import '../transfer/file_sender.dart';
+ import '../transfer/native_sha256.dart';
++import '../transfer/speed_mode.dart';
+ import '../connection/candidate.dart';
+ import '../connection/connection.dart';
+ import '../connection/connection_manager.dart';
+@@ -81,6 +82,7 @@
+     this.advertiseIp,
+     this.eventLog,
+     this.sessionStore,
++    this.speedMode = kDefaultSpeedMode,
+   }) : _registry = PeerRegistry(
+          selfDeviceId: self.deviceId,
+          clock: clock,
+@@ -165,6 +167,11 @@
+   final EventLog? eventLog;
+   final SessionStore? sessionStore;
+ 
++  /// Local speed mode: how many chunks of one file go in parallel when a send
++  /// passes no `chunkConcurrency`. Read when a send starts, so a change never
++  /// touches a running send. Never sent on the wire.
++  SpeedMode speedMode;
++
+   /// Owner of Receive mode (Off / For(N) / Always, visibility, pauses). Its
+   /// gate is this engine.
+   late final ReceiveController receive;
+@@ -782,7 +789,7 @@
+     required String host,
+     required int port,
+     String? pin,
+-    int chunkConcurrency = 3,
++    int? chunkConcurrency,
+     Duration acceptTimeout = kPermissionTimeout,
+   }) async => beginSendFiles(
+     files,
+@@ -802,7 +809,7 @@
+     DiscoveredDevice device,
+     List<File> files, {
+     String? pin,
+-    int chunkConcurrency = 3,
++    int? chunkConcurrency,
+     Duration acceptTimeout = kPermissionTimeout,
+     Duration probeTimeout = const Duration(milliseconds: 1500),
+   }) async => beginSendTo(
+@@ -826,7 +833,7 @@
+     required String host,
+     required int port,
+     String? pin,
+-    int chunkConcurrency = 3,
++    int? chunkConcurrency,
+     Duration acceptTimeout = kPermissionTimeout,
+   }) => _beginSend(
+     files,
+@@ -844,7 +851,7 @@
+     DiscoveredDevice device,
+     List<File> files, {
+     String? pin,
+-    int chunkConcurrency = 3,
++    int? chunkConcurrency,
+     Duration acceptTimeout = kPermissionTimeout,
+     Duration probeTimeout = const Duration(milliseconds: 1500),
+   }) => beginSendToCandidates(
+@@ -861,7 +868,7 @@
+     DiscoveredDevice device,
+     List<File> files, {
+     String? pin,
+-    int chunkConcurrency = 3,
++    int? chunkConcurrency,
+     Duration acceptTimeout = kPermissionTimeout,
+     Duration probeTimeout = const Duration(milliseconds: 1500),
+     List<Candidate>? candidates,
+@@ -884,9 +891,12 @@
+     List<File> files, {
+     required FindEndpoint find,
+     required String? pin,
+-    required int chunkConcurrency,
++    required int? chunkConcurrency,
+     required Duration acceptTimeout,
+   }) {
++    // Null means the speed mode decides; an explicit count always wins.
++    final concurrency =
++        chunkConcurrency ?? speedProfileFor(speedMode).chunkConcurrency;
+     if (!_secure) {
+       return OutgoingSend.start(
+         files: files,
+@@ -896,7 +906,7 @@
+           client: client,
+           self: deviceInfo,
+           pin: pin,
+-          chunkConcurrency: chunkConcurrency,
++          chunkConcurrency: concurrency,
+           acceptTimeout: acceptTimeout,
+           onEvent: onEvent,
+         ),
+@@ -933,7 +943,7 @@
+           client: client,
+           self: deviceInfo,
+           pin: pin,
+-          chunkConcurrency: chunkConcurrency,
++          chunkConcurrency: concurrency,
+           acceptTimeout: acceptTimeout,
+           onEvent: onEvent,
+           security: p.plaintext ? const SecurityConfig.plaintext() : _config,
+--- a/packages/libreshare_cli/lib/ls_cli.dart
++++ b/packages/libreshare_cli/lib/ls_cli.dart
+@@ -481,7 +481,17 @@
+     )
+     ..addOption('alias')
+     ..addOption('pin')
+-    ..addOption('concurrency', defaultsTo: '3')
++    ..addFlag('help', abbr: 'h', negatable: false, help: 'show this help')
++    ..addOption(
++      'speed',
++      help:
++          'eco (one chunk at a time), balanced (three, the default) or turbo '
++          '(eight chunks in flight). Local to this sender.',
++    )
++    ..addOption(
++      'concurrency',
++      help: 'chunks in flight per file; overrides --speed',
++    )
+     ..addOption(
+       'timeout',
+       defaultsTo: '120',
+@@ -555,6 +565,10 @@
+     );
+   }
+   final cmd = top.command;
++  if (cmd != null && cmd.name == 'send' && cmd['help'] == true) {
++    io.out(parser.commands['send']!.usage);
++    return 0;
++  }
+   if (top['help'] == true || cmd == null) {
+     io.out(_usage);
+     return cmd == null && top['help'] != true ? 64 : 0;
+@@ -997,7 +1011,21 @@
+     io.err('send: no files given');
+     return 64;
+   }
+-  final concurrency = int.tryParse(r['concurrency'] as String) ?? 3;
++  // --speed picks the mode; absent means balanced. An explicit --concurrency
++  // (when given) wins over the mode's chunk count.
++  SpeedMode? speed;
++  final speedArg = r['speed'] as String?;
++  if (speedArg != null) {
++    speed = parseSpeedMode(speedArg);
++    if (speed == null) {
++      io.err('send: --speed must be one of: eco, balanced, turbo');
++      return 64;
++    }
++  }
++  final concurrencyArg = r['concurrency'] as String?;
++  final concurrency = concurrencyArg == null
++      ? null
++      : int.tryParse(concurrencyArg);
+   final timeout = int.tryParse(r['timeout'] as String) ?? 120;
+   final findTimeout = _parseSeconds(r['find-timeout'] as String?);
+   if (deviceArg != null && findTimeout == null) {
+@@ -1029,6 +1057,7 @@
+     receiveConfig: const ReceiveConfig(initialMode: ReceiveOff()),
+     security: setup.wiring,
+     advertiseIp: setup.advertiseIp,
++    speedMode: speed ?? kDefaultSpeedMode,
+   );
+   OutgoingSend? running;
+   DiscoveredDevice? chosen;
+--- a/apps/libreshare_app/lib/services/app_settings_store.dart
++++ b/apps/libreshare_app/lib/services/app_settings_store.dart
+@@ -21,6 +21,7 @@
+     this.storageAsked = false,
+     this.pinMode = PinMode.off,
+     this.hardwareHashingEnabled = false,
++    this.speedMode = kDefaultSpeedMode,
+   });
+ 
+   /// Stable UUID of this installation.
+@@ -44,6 +45,9 @@
+   /// Whether hardware-accelerated SHA-256 is enabled (Option 2).
+   final bool hardwareHashingEnabled;
+ 
++  /// Transfer speed of sends from this device (eco, balanced, turbo).
++  final SpeedMode speedMode;
++
+   AppSettings copyWith({
+     String? deviceId,
+     String? alias,
+@@ -53,6 +57,7 @@
+     bool? storageAsked,
+     PinMode? pinMode,
+     bool? hardwareHashingEnabled,
++    SpeedMode? speedMode,
+   }) => AppSettings(
+     deviceId: deviceId ?? this.deviceId,
+     alias: alias ?? this.alias,
+@@ -62,6 +67,7 @@
+     pinMode: pinMode ?? this.pinMode,
+     hardwareHashingEnabled:
+         hardwareHashingEnabled ?? this.hardwareHashingEnabled,
++    speedMode: speedMode ?? this.speedMode,
+   );
+ 
+   Map<String, Object?> toJson() => {
+@@ -73,6 +79,7 @@
+     'storageAsked': storageAsked,
+     'pinMode': pinMode.name,
+     if (hardwareHashingEnabled) 'hardwareHashing': true,
++    'speedMode': speedMode.name,
+   };
+ 
+   @override
+@@ -84,7 +91,8 @@
+       other.preferredPort == preferredPort &&
+       other.storageAsked == storageAsked &&
+       other.pinMode == pinMode &&
+-      other.hardwareHashingEnabled == hardwareHashingEnabled;
++      other.hardwareHashingEnabled == hardwareHashingEnabled &&
++      other.speedMode == speedMode;
+ 
+   @override
+   int get hashCode => Object.hash(
+@@ -95,6 +103,7 @@
+     storageAsked,
+     pinMode,
+     hardwareHashingEnabled,
++    speedMode,
+   );
+ }
+ 
+@@ -147,6 +156,12 @@
+       storageAsked: asked is bool && asked,
+       pinMode: mode,
+       hardwareHashingEnabled: hw,
++      // An unknown or missing value reads as the default, never an error.
++      speedMode:
++          parseSpeedMode(
++            j['speedMode'] is String ? j['speedMode'] as String : null,
++          ) ??
++          kDefaultSpeedMode,
+     );
+     if (id is! String) await save(settings);
+     return settings;
+--- a/apps/libreshare_app/lib/providers/settings_provider.dart
++++ b/apps/libreshare_app/lib/providers/settings_provider.dart
+@@ -84,6 +84,17 @@
+     await _save();
+   }
+ 
++  /// Sets the transfer speed of sends from this device. Running sends keep
++  /// their mode; the engine follows the new one for the next send. The mode
++  /// is stored first, so a state change means it is on disk.
++  Future<void> setSpeedMode(SpeedMode mode) async {
++    if (mode == state.speedMode) return;
++    await ref
++        .read(appSettingsStoreProvider)
++        .save(state.copyWith(speedMode: mode));
++    state = state.copyWith(speedMode: mode);
++  }
++
+   Future<void> _save() => ref.read(appSettingsStoreProvider).save(state);
+ }
+ 
+--- a/apps/libreshare_app/lib/providers/engine_provider.dart
++++ b/apps/libreshare_app/lib/providers/engine_provider.dart
+@@ -108,6 +108,11 @@
+       ),
+     );
+     ref.watch(pinRevisionProvider);
++    // The speed mode does not need a rebuild: the running engine follows it.
++    ref.listen(settingsProvider.select((s) => s.speedMode), (_, mode) {
++      final running = state.value;
++      if (running != null) running.speedMode = mode;
++    });
+     // Only a suggestion for a first run (the stored identity wins), so a
+     // change of it does not rebuild the engine.
+     final suggestedId = ref.read(settingsProvider).deviceId;
+@@ -174,6 +179,7 @@
+     }
+ 
+     final engine = LibreShareEngine(
++      speedMode: ref.read(settingsProvider).speedMode,
+       self: DeviceInfo(
+         deviceId: storedDeviceId,
+         alias: settings.alias,
+--- a/apps/libreshare_app/lib/screens/settings_screen.dart
++++ b/apps/libreshare_app/lib/screens/settings_screen.dart
+@@ -246,6 +246,44 @@
+                   ],
+                 ),
+               ),
++              section(tr('settings.speed')),
++              Card(
++                child: Column(
++                  children: [
++                    for (final (mode, title, help) in [
++                      (
++                        SpeedMode.eco,
++                        tr('settings.speedEco'),
++                        tr('settings.speedEcoHelp'),
++                      ),
++                      (
++                        SpeedMode.balanced,
++                        tr('settings.speedBalanced'),
++                        tr('settings.speedBalancedHelp'),
++                      ),
++                      (
++                        SpeedMode.turbo,
++                        tr('settings.speedTurbo'),
++                        tr('settings.speedTurboHelp'),
++                      ),
++                    ])
++                      ListTile(
++                        key: Key('speed_mode_${mode.name}'),
++                        selected: settings.speedMode == mode,
++                        leading: Icon(
++                          settings.speedMode == mode
++                              ? Icons.radio_button_checked
++                              : Icons.radio_button_unchecked,
++                        ),
++                        title: Text(title),
++                        subtitle: Text(help),
++                        onTap: () => ref
++                            .read(settingsProvider.notifier)
++                            .setSpeedMode(mode),
++                      ),
++                  ],
++                ),
++              ),
+               section(tr('settings.network')),
+               Card(
+                 child: ListTile(
+--- a/apps/libreshare_app/lib/l10n_strings.dart
++++ b/apps/libreshare_app/lib/l10n_strings.dart
+@@ -247,6 +247,15 @@
+   'settings.portLabel': 'Preferred port',
+   'settings.portInvalid': 'Enter a port from 1024 to 65535.',
+   'settings.busy': 'Finish the current transfers first. This change restarts the connection.',
++  'settings.speed': 'Transfer speed',
++  'settings.speedEco': 'Eco',
++  'settings.speedBalanced': 'Balanced',
++  'settings.speedTurbo': 'Turbo',
++  'settings.speedEcoHelp':
++      'One chunk at a time. Gentlest on battery and old computers.',
++  'settings.speedBalancedHelp': 'Three chunks at a time. The default.',
++  'settings.speedTurboHelp':
++      'Eight chunks at a time. Fastest on SSDs and fast links.',
+   'settings.help': 'Help',
+   'help.title': "Can't see devices?",
+   'help.body': 'Both devices need to be on the same network, and the other one needs Receive turned on. Guest, hotel and campus Wi-Fi often isolates devices; in that case add the device by IP address or QR code, or use a phone hotspot. A firewall can also block LibreShare: on Linux, run one of the commands below once.',

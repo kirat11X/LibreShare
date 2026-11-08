@@ -1,0 +1,123 @@
+--- a/packages/libreshare_core/lib/src/transfer/file_receiver.dart
++++ b/packages/libreshare_core/lib/src/transfer/file_receiver.dart
+@@ -702,6 +702,7 @@
+     final capture = _DigestCapture();
+     final hasher = sha256.startChunkedConversion(capture);
+     var received = 0;
++    var chunkOk = false;
+     RandomAccessFile? raf;
+ 
+     final inOrderForRunning =
+@@ -760,6 +761,7 @@
+       if (inOrderForRunning) {
+         f.nextExpectedChunkIndex++;
+       }
++      chunkOk = true;
+     } on FileSystemException catch (e) {
+       if (s.status != TransferStatus.inProgress) _throwStateError(s);
+       if (_isDiskFull(e)) {
+@@ -772,6 +774,14 @@
+       _log.warning('chunk write failed: ${e.message}');
+       throw LsException(LsErrorCode.internal, 'chunk write failed');
+     } finally {
++      if (!chunkOk && inOrderForRunning) {
++        // The running hash absorbed part of this chunk; a retry would feed it
++        // again. Drop it so the final check re-hashes the file instead.
++        f.canUseRunningHash = false;
++        f.runningHasher?.close();
++        f.runningHasher = null;
++        f.runningCapture = null;
++      }
+       await raf?.close();
+       if (s.status == TransferStatus.failed &&
+           s.failureReason == FailureReason.cancelled &&
+--- a/packages/libreshare_core/lib/src/transfer/file_sender.dart
++++ b/packages/libreshare_core/lib/src/transfer/file_sender.dart
+@@ -610,17 +610,35 @@
+     run.throwIfAborted();
+ 
+     // Stream single-pass chunk buffer for the upload
++    var attempted = false;
+     await _retry(
+       run,
+-      () => client.putChunk(
+-        run.sessionId,
+-        item.fileId,
+-        index,
+-        Stream.value(chunkBytes),
+-        length: r.length,
+-        chunkSha256: hash,
+-        token: token,
+-      ),
++      () async {
++        if (attempted) {
++          // A previous attempt failed or its ack was lost: ask the receiver
++          // before re-sending, so an acknowledged chunk is never PUT again.
++          final state = await client.fileState(
++            run.sessionId,
++            item.fileId,
++            token: token,
++          );
++          if (_receivedSet(state.receivedRanges, item.chunkCount).contains(
++            index,
++          )) {
++            return;
++          }
++        }
++        attempted = true;
++        await client.putChunk(
++          run.sessionId,
++          item.fileId,
++          index,
++          Stream.value(chunkBytes),
++          length: r.length,
++          chunkSha256: hash,
++          token: token,
++        );
++      },
+     );
+     run.bytesSent += r.length;
+     progress.done += r.length;
+@@ -691,19 +709,34 @@
+   static bool _isMissingChunks(Object e) =>
+       e is LsException && e.code == LsErrorCode.missingChunks;
+ 
+-  /// Chunk indices the peer reports as held, clamped to the real chunk count so
+-  /// a hostile or buggy `[0, 2^62]` cannot blow up memory.
++  /// Chunk indices the peer reports as held. Every range must be a `[start,
++  /// end]` pair with 0 <= start <= end < chunkCount, and no two ranges may
++  /// overlap; anything else is a protocol error (the peer is lying or broken),
++  /// so nothing is skipped on its strength.
+   static Set<int> _receivedSet(ChunkRanges ranges, int chunkCount) {
+-    final clamped = <List<int>>[];
++    final valid = <List<int>>[];
+     for (final r in ranges) {
+-      if (r.length != 2) continue;
+-      final lo = math.max(r[0], 0);
+-      final hi = math.min(r[1], chunkCount - 1);
+-      if (lo <= hi) clamped.add([lo, hi]);
++      if (r.length != 2) throw _badStateRanges(r);
++      final lo = r[0];
++      final hi = r[1];
++      if (lo < 0 || hi >= chunkCount || lo > hi) throw _badStateRanges(r);
++      valid.add([lo, hi]);
+     }
+-    return expandRanges(clamped);
++    final sorted = [...valid]..sort((a, b) => a[0].compareTo(b[0]));
++    for (var i = 1; i < sorted.length; i++) {
++      if (sorted[i][0] <= sorted[i - 1][1]) {
++        throw _badStateRanges(sorted[i]);
++      }
++    }
++    return expandRanges(valid);
+   }
+ 
++  static _SendFailure _badStateRanges(List<int> range) => _SendFailure(
++    FailureReason.protocolError,
++    'peer /state reports an invalid chunk range $range',
++    notifyPeer: true,
++  );
++
+   static _SendFailure _classify(Object e) {
+     if (e is _SendFailure) return e;
+     if (e is SasAbortedException) {

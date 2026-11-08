@@ -1,0 +1,86 @@
+import 'package:logging/logging.dart';
+
+const String kRedacted = '[redacted]';
+
+// Regex patterns designed for linear-time scanning without catastrophic backtracking:
+
+// 1. Path segment after /t/: /t/<token> up to /, ?, #, whitespace, quote or backslash
+final RegExp _pathTokenRegex = RegExp(r'''(/t/)[^\s/?#"'\\]+''');
+
+// 2. URL fragments: #<fragment> up to whitespace, quotes or backslash
+final RegExp _fragmentRegex = RegExp(r'''#[^\s"'\\]+''');
+
+// 3. libreshare:// query parameters: libreshare://<path>?<query>
+final RegExp _libreshareQueryRegex = RegExp(
+  r'''(libreshare://[^\s?#]+)\?[^\s#"'\\]+''',
+);
+
+// 4. key=value secret parameters: k, t, pin, s, claim
+final RegExp _paramRegex = RegExp(
+  r'''(?<=[?&]|^|\s)(k|t|pin|s|claim)=([^\s&#"'\\]+)''',
+);
+
+// 5. X-LS-Claim header (case-insensitive)
+final RegExp _claimHeaderRegex = RegExp(
+  r'''(x-ls-claim\s*:\s*)[^\r\n]+''',
+  caseSensitive: false,
+);
+
+/// Pure, idempotent: redactSecrets(redactSecrets(x)) == redactSecrets(x).
+String redactSecrets(String text) {
+  if (text.isEmpty) return text;
+
+  // 1. libreshare:// query
+  var result = text.replaceAllMapped(
+    _libreshareQueryRegex,
+    (m) => '${m[1]}?$kRedacted',
+  );
+
+  // 2. /t/<token>
+  result = result.replaceAllMapped(_pathTokenRegex, (m) => '${m[1]}$kRedacted');
+
+  // 3. Fragments: #<fragment>
+  result = result.replaceAllMapped(_fragmentRegex, (_) => '#$kRedacted');
+
+  // 4. key=value secret params: k, t, pin, s, claim
+  result = result.replaceAllMapped(_paramRegex, (m) => '${m[1]}=$kRedacted');
+
+  // 5. X-LS-Claim header
+  result = result.replaceAllMapped(
+    _claimHeaderRegex,
+    (m) => '${m[1]}$kRedacted',
+  );
+
+  return result;
+}
+
+/// Pure. Returns uri.toString() after redactSecrets.
+String redactUri(Uri uri) {
+  return redactSecrets(uri.toString());
+}
+
+/// Log handler that passes every record's message, error text and stack-trace text through
+/// redactSecrets before it reaches [sink]. Never throws; a throwing sink is swallowed.
+void Function(LogRecord) redactingLogHandler(void Function(String line) sink) {
+  return (LogRecord record) {
+    try {
+      final sb = StringBuffer();
+      sb.write('${record.time} ${record.level.name} [${record.loggerName}] ');
+      sb.write(redactSecrets(record.message));
+
+      if (record.error != null) {
+        sb.write(' Error: ');
+        sb.write(redactSecrets(record.error.toString()));
+      }
+
+      if (record.stackTrace != null) {
+        sb.write('\n');
+        sb.write(redactSecrets(record.stackTrace.toString()));
+      }
+
+      sink(sb.toString());
+    } catch (_) {
+      // Swallowed per specification: never throws.
+    }
+  };
+}

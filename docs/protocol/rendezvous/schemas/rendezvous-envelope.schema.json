@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://libreshare.example/protocol/lspr1/schemas/rendezvous-envelope.schema.json",
+  "title": "RendezvousEnvelope",
+  "description": "NIP-01 compliant wire envelope for encrypted LibreShare rendezvous signaling (LSP-R1 Section 3).",
+  "type": "object",
+  "required": ["kind", "pubkey", "created_at", "tags", "content", "id", "sig"],
+  "properties": {
+    "kind": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Nostr event kind (ephemeral kind, typically 20059 or 1059)."
+    },
+    "pubkey": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{64}$",
+      "description": "32-byte BIP-340 public key in lowercase hex."
+    },
+    "created_at": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Event publication timestamp in seconds since Unix epoch."
+    },
+    "tags": {
+      "type": "array",
+      "description": "Nostr tags list, including the channel p-tag and NIP-40 expiration.",
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "content": {
+      "type": "string",
+      "description": "Base64url-encoded encrypted payload (IV + ciphertext + GCM tag)."
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{64}$",
+      "description": "SHA-256 event identifier per NIP-01."
+    },
+    "sig": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{128}$",
+      "description": "64-byte BIP-340 Schnorr signature in hex."
+    }
+  },
+  "additionalProperties": false,
+  "examples": [
+    {
+      "kind": 20059,
+      "pubkey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "created_at": 1799284800,
+      "tags": [
+        ["p", "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"],
+        ["expiration", "1799285100"]
+      ],
+      "content": "base64url_encrypted_payload_example",
+      "id": "111122223333444455556666777788889999aaaabbbbccccddddeeeeffff0000",
+      "sig": "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+    }
+  ]
+}

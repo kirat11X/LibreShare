@@ -1,0 +1,64 @@
+# Traceability Audit & Gap Analysis (`traceability-gaps.md`)
+
+**Date:** 2026-11-07  
+**Author:** Antigravity (Lead)  
+**Reference Specs:** `docs/LIBRESHARE_BUILD_SPEC.md`, `docs/plans/inc4.md` §4/§4.1, `docs/traceability.md`  
+**Purpose:** Comprehensive mapping of every functional (FR-01..FR-17) and non-functional (NFR-01..NFR-06) requirement to automated test suites, establishing verdicts (`COVERED`, `WEAK`, `MISSING`) to guide high-level test cards T2–T8.
+
+---
+
+## 1. Traceability Audit Matrix
+
+| Req ID | Requirement Summary | Implementation Module(s) | Existing Automated Test Files | Verdict | Gap Analysis & Target Card |
+|---|---|---|---|---|---|
+| **FR-01** | Listener port binding & fallback 53318–53327; announced port matches bound port | `engine/libreshare_engine.dart`, `server/api_server.dart` | `unit/startup_test.dart`, `unit/port_fallback_test.dart`, `integration/receive_mode_engine_test.dart` | **COVERED** | Verified port fallback, `/info`, `/register`, and error on all ports taken. |
+| **FR-02** | Automatic discovery: Multicast, mDNS, subnet scan, QR/manual (discovery $\le 3$ s, subnet fallback $\le 10$ s) | `discovery/*`, `engine/libreshare_engine.dart`, `ls_cli.dart` | `integration/engine_discovery_test.dart`, `unit/multicast_discovery_test.dart`, `unit/subnet_scanner_test.dart`, `cli_commands_test.dart`, `tools/docker/e2e.sh` | **COVERED** | Verified timing bounds, dropped UDP scan triggers, device list updates. |
+| **FR-03** | Device presentation: alias, IP, platform icon, trust badge, last-seen | `model/device.dart`, `engine/libreshare_engine.dart`, `home_screen.dart` | `apps/test/home_screen_test.dart`, `cli_commands_test.dart`, `unit/device_registry_test.dart` | **COVERED** | Widget tests verify UI cards, platform icons, trust badges; CLI verifies JSON. |
+| **FR-04** | Peer selection initiates transfer session; cancels/fails cleanly | `engine/libreshare_engine.dart`, `outgoing_send.dart`, `send_flow.dart` | `apps/test/send_flow_test.dart`, `integration/outgoing_send_test.dart`, `cli_commands_test.dart` | **COVERED** | Verified file picking, cancellable handles, progress notifications. |
+| **FR-05** | Mutual TLS 1.3 between peers; ECDSA P-256; certificate fingerprint pinning | `security/*`, `server/api_server.dart`, `client/api_client.dart` | `security/tls_identity_test.dart`, `security/pinning_test.dart`, `security/engine_tls_handshake_test.dart`, `integration/secure_two_engine_test.dart` | **COVERED** | TLS 1.3 mutual handshake and pinned fingerprint validation verified. |
+| **FR-06** | Session consent: Accept/Reject UI, reject $\rightarrow$ `FAILED(REJECTED)`, 120s timeout $\rightarrow$ `FAILED(TIMEOUT)`, SAS code | `session/*`, `security/consent_policy.dart`, `apps/test/incoming_test.dart` | `unit/permission_test.dart`, `unit/receiver_secure_session_test.dart`, `security/sas_binding_test.dart`, `apps/test/incoming_test.dart` | **COVERED** | Acceptance, rejection, timeout transitions, and SAS 6-digit verification pass. |
+| **FR-07** | Manifest & multi-file transfer; smallest files sent first | `transfer/manifest.dart`, `transfer/file_sender.dart` | `unit/manifest_test.dart`, `unit/file_sender_test.dart`, `integration/two_engine_test.dart` | **COVERED** | Multi-file manifest sorting, smallest-first ordering verified. |
+| **FR-08** | Chunking (4 MiB); boundary sizes 0, 1, 4MB-1, 4MB, 4MB+1; 64-bit offsets; 2 GiB / 5 GiB sparse files | `transfer/chunker.dart`, `transfer/file_sender.dart` | `unit/chunker_test.dart`, `integration/large_transfer_test.dart` | **WEAK** | Chunk math tested in unit tests, but real 2-process CLI matrix lacks automated 2 GiB sparse file, 0-byte file, and 200-file directory trees. $\rightarrow$ **Target: T2** |
+| **FR-09** | Byte-identical reconstruction; `.lspart` temp files; atomic rename; mtime preservation; traversal prevention | `transfer/file_receiver.dart`, `transfer/atomic_file.dart`, `filename_sanitizer.dart` | `unit/file_receiver_test.dart`, `unit/atomic_file_test.dart`, `unit/filename_sanitizer_test.dart`, `path_traversal_secure_test.dart` | **WEAK** | POSIX traversal contained, but Windows reserved names (`CON`, `PRN`, `NUL`), trailing dot/spaces, and `\\?\` UNC prefixes lack Linux-hosted regression suite. $\rightarrow$ **Target: T7, T2** |
+| **FR-10** | Integrity verification: chunk hash mismatch returns 422 + resend; whole-file SHA-256 failure cleans `.lspart` | `transfer/hashing.dart`, `transfer/file_receiver.dart`, `transfer/native_sha256.dart` | `unit/hashing_test.dart`, `unit/file_receiver_test.dart`, `integration/chunk_retry_integrity_test.dart` | **COVERED** | 422 chunk rejection, retry resend, and corrupted file partial deletion verified. |
+| **FR-11** | Completion notification on sender and receiver; "Show in folder"; event stream | `monitor/*`, `libreshare_cli`, `transfer_screen.dart` | `integration/two_engine_test.dart`, `cli_loopback_test.dart`, `apps/test/transfer_screen_test.dart` | **COVERED** | Both peers emit terminal `SessionFinished(success)` and `FileSaved` events. |
+| **FR-12** | Connection ladder priority: Wi-Fi tier chosen first when healthy | `connection/connection_manager.dart`, `model/candidate.dart` | `unit/candidate_test.dart`, `integration/ladder_fault_test.dart` | **COVERED** | Candidate ladder sorting and preference for healthy Wi-Fi candidate verified. |
+| **FR-13** | Mid-transfer fallback: cut Wi-Fi $\rightarrow$ switch to LAN $\le 10$ s; `ChannelTierSwitched`; no acked chunks re-sent | `engine/libreshare_engine.dart`, `transfer/file_sender.dart` | `integration/ladder_fault_test.dart`, Card `F-B` | **COVERED** | Tier 1 severed mid-stream falls back to tier 2 within 10s; `/state` skips acknowledged chunks; finishes byte-identical. |
+| **FR-14** | Off-LAN internet link transfer via tunnel; E2E AEAD encryption (AES-256-GCM); share links; claim binding | `tunnel/*`, `share/*`, `security/tunnel_crypto.dart` | Inc 5 proposal suites (`tunnel_crypto_test`, `share_link_test`, `e2e_ciphertext_test`, `link_test`) | **WEAK** | Fully verified in proposals (`inc5-proposals/`), but awaiting orchestrator application to real tree. $\rightarrow$ **Target: T8, T2** |
+| **FR-15** | Resume after crash / interrupted transfer from chunk bitmap, up to 24 h | `transfer/resume_store.dart`, `storage/session_store.dart` | `unit/resume_store_test.dart`, `integration/chunk_retry_integrity_test.dart` | **WEAK** | In-process resume unit tests pass, but real CLI multi-process restart (`ls receive` SIGKILL + restart) lacks automated E2E test. $\rightarrow$ **Target: T2** |
+| **FR-16** | Threat model defenses: pinned cert mismatch refusal (D6); PIN brute force lockout (5/10 min); canary secrets | `security/*`, `engine/security_wiring.dart`, `transfer/filename_sanitizer.dart` | `security/ladder_pin_test.dart`, `security/pin_test.dart`, `security/connection_cap_test.dart` | **WEAK** | Positive/unit security guards pass, but negative attacker-in-the-middle proxy threats (replayed chunk PUT, forged goodbye budget, TLS downgrade, slowloris headers, canary secret in logs) lack a consolidated suite. $\rightarrow$ **Target: T4** |
+| **FR-17** | Bidirectional transfers: A $\rightarrow$ B then B $\rightarrow$ A without port or state conflicts | `engine/libreshare_engine.dart`, `ls_cli.dart` | `integration/two_engine_test.dart`, `cli_loopback_test.dart` | **COVERED** | Two engines transfer in both directions sequentially and concurrently. |
+| **NFR-01** | Usability: zero configuration on LAN; fresh install to first transfer in $\le 3$ clicks/taps; a11y & touch targets | `apps/libreshare_app`, `ls_cli.dart` | `cli_commands_test.dart`, `home_screen_test.dart` | **WEAK** | Zero-config LAN transfer passes, but automated tap count ($\le 3$), touch targets (48dp), semantics labels, and text scale (1.3/2.0) lack headless UI tests. $\rightarrow$ **Target: T6** |
+| **NFR-02** | Speed & Performance: loopback $\ge 300$ MB/s plain / $\ge 100$ MB/s secure target; $\le 20\%$ regression gate | `tools/bench/**`, `transfer/native_sha256.dart`, `transfer/speed_mode.dart` | `tools/bench/gate.sh`, `native_sha256_transfer_test.dart`, `speed_mode_test.dart` | **COVERED** | Native SHA-256 (S2) and speed modes (S3) deliver ~105 MiB/s plain / ~68 MiB/s secure. Gate enforced in CI. |
+| **NFR-03** | Reliability: 20 randomized fault-injection runs each end `COMPLETED` or clean `FAILED` with persisted state | `connection/*`, `helpers/faulty_tcp_proxy.dart` | `helpers/faulty_tcp_proxy_test.dart`, `ladder_fault_test.dart` | **MISSING** | Dedicated 20-seed deterministic schedule runner with seeded `Random` (`random_faults_test.dart`) not yet in real tree. $\rightarrow$ **Target: T5** |
+| **NFR-04** | Security & Privacy: zero plaintext on relays; canary secrets never leaked to logs/events | `security/*`, `tunnel/*`, `secret_redactor.dart` | `e2e_ciphertext_test.dart`, `secret_redactor_test.dart` | **WEAK** | Component tests pass, but end-to-end full transfer with canary secrets audited across all captured log streams is missing. $\rightarrow$ **Target: T4** |
+| **NFR-05** | Portability: Linux x64, Windows 10/11 x64, Android 10+ | CI workflows, `apps/libreshare_app/lib/platform/` | Prototype packaging, `android_emulator_smoke.sh`, `windows_manual.md` | **WEAK** | Linux and Android verified; Windows path/rename/quoting semantics on Linux host need automated test suite. $\rightarrow$ **Target: T7, T9** |
+| **NFR-06** | Efficiency: tunnel unused when local LAN healthy; bounded memory growth (< 150 MB RSS over 1 GiB) | `connection/*`, `transfer/*` | `ladder_order_test.dart`, `native_sha256_child.dart` | **WEAK** | Ladder order verified, but 50 parallel sessions, 1,000 tiny files, and child-process RSS leak bounds lack dedicated soak test. $\rightarrow$ **Target: T5** |
+
+---
+
+## 2. Steering & Roadmap for Cards T2 through T8
+
+Based on the audit verdicts above, cards T2 through T8 are allocated to resolve every `WEAK` and `MISSING` item:
+
+1. **Card T3 (Protocol Fuzz & Property Tests):**
+   - *Targeting:* Parser robustness across untrusted input.
+   - *Scope:* Seeded property tests (time-capped 20s each) for manifest JSON, request headers (`X-Chunk-Sha256`, ranges), `/state` response shapes, multicast announce packets, link/URI parsers, filename sanitizer (`package:path` POSIX & Win32 contexts), and `Chunker` 64-bit offset arithmetic.
+2. **Card T7 (Windows Semantics on Linux):**
+   - *Targeting:* `FR-09`, `NFR-05` (Windows portability without requiring Windows hardware).
+   - *Scope:* Pure-function test suite using `package:path` Windows context: reserved DOS names (`CON`, `PRN`, `AUX`, `NUL`, `COM1..9`, `LPT1..9`, trailing dots/spaces), `\\?\` UNC prefixes, drive letters, `isWithin` traversal guards, argument quoting (`explorer.exe /select,`), CRLF text handling.
+3. **Card T4 (Security Regression Suite vs Threat Model):**
+   - *Targeting:* `FR-16`, `NFR-04` (Negative security specifications).
+   - *Scope:* Consolidated threat regressions with `FaultyTcpProxy`: replayed chunk PUT, forged goodbye budget, wrong-cert MITM, TLS downgrade attempts, PIN brute-force lockout, Slowloris slow headers, 17th connection cap, forged `/state` range injection, lying receiver/sender detection, canary secret log audit.
+4. **Card T2 (CLI End-to-End Matrix):**
+   - *Targeting:* `FR-08`, `FR-09`, `FR-15` (Real 2-process CLI matrix).
+   - *Scope:* Real `ls send` and `ls receive` processes: single file, 0-byte file, 1 KiB, 4 MiB $\pm 1$, directory tree with 200 small files and unicode names, name collision deduplication, space/emoji/RTL names, Windows-reserved filenames, path traversal strings, symlink containment, 2 GiB sparse file (`slow`), cancel mid-transfer, receiver restart mid-transfer, PIN verification, Contacts-only refusal.
+5. **Card T8 (Schema Conformance of Live Traffic):**
+   - *Targeting:* Protocol conformance against `docs/protocol/schemas/*.json`.
+   - *Scope:* In-process HTTP recorder capturing all REST exchanges during full transfer; validates every request and response body against formal JSON schemas; tests negative malformed schema rejections.
+6. **Card T6 (App-Level Widget Tests Without Screen):**
+   - *Targeting:* `NFR-01` (Usability and accessibility metrics).
+   - *Scope:* Headless widget tests: first-run to first-transfer in $\le 3$ taps, receive-consent dialog flows (accept/decline/timeout), history screen persistence, error text mapping for all `FailureReason` enums, text scale 1.3x/2.0x, 48dp minimum touch target bounds, semantics labels on actionable widgets, zero secrets rendered in widget trees.
+7. **Card T5 (Soak & Stress Tests):**
+   - *Targeting:* `NFR-03`, `NFR-06` (Reliability and memory bounds).
+   - *Scope:* 50 concurrent sessions, 1,000 tiny files in one session, 10 senders to 1 receiver, RSS growth ceiling (< 150 MB growth in child process), zero leftover sockets/isolates/temp files, terminal event stream consistency.

@@ -73,7 +73,7 @@ class SendResult {
 
 class FileSender {
   FileSender({
-    required this.client,
+    required PeerClient client,
     required this.self,
     this.chunker = const Chunker(),
     this.chunkConcurrency = 3,
@@ -89,7 +89,9 @@ class FileSender {
     this.hashLimitBytes = kManifestHashLimit,
     this.security = const SecurityConfig.plaintext(),
     this.pinnedReceiverFingerprint,
+    this.nextClient,
   }) {
+    _client = client;
     final pinned = pinnedReceiverFingerprint;
     if (pinned != null && !RegExp(r'^[0-9A-Fa-f]{64}$').hasMatch(pinned)) {
       // A malformed pin must never mean "first contact".
@@ -114,7 +116,22 @@ class FileSender {
     }
   }
 
-  final PeerClient client;
+  late PeerClient _client;
+
+  /// The client of the tier the send currently uses.
+  PeerClient get client => _client;
+
+  /// FR-13 fallback: called once the bounded retries of a transient failure
+  /// on the current tier are spent. Returns the client of the next ladder
+  /// candidate (the sender then resyncs with `/state` and sends only the
+  /// missing chunks), or null when none is left (the send ends
+  /// FAILED(NO_CONNECTION)). It may throw a security refusal (the candidate
+  /// presented another key): the send then fails with that error, as on first
+  /// contact, and nothing is sent to that candidate.
+  final Future<PeerClient?> Function(PeerClient failed)? nextClient;
+
+  /// The fallback in progress, shared by every task that failed on the same tier.
+  Future<void>? _switching;
   final DeviceInfo self;
   final Chunker chunker;
 
@@ -257,7 +274,7 @@ class FileSender {
       run.sasOutstanding = sas.ns != null;
     }
     // Not retried: a blind retry could make the receiver prompt twice.
-    var st = await client.createSession(request);
+    var st = await _client.createSession(request);
     run.sessionId = st.sessionId;
     _emit(SessionCreated(run.sessionId, outgoing: true));
     run.throwIfAborted();
@@ -288,7 +305,11 @@ class FileSender {
       (e) => _sendFile(run, e, accepted[e.item.fileId]!),
     );
 
-    final fin = await _retry(run, () => client.finish(run.sessionId));
+    final fin = await _retry(
+      run,
+      () => _client.finish(run.sessionId),
+      switchTier: true,
+    );
     switch (fin.status) {
       case TransferStatus.completed:
         return;
@@ -312,13 +333,13 @@ class FileSender {
   /// Learns and checks the receiver (LSP-1 4.7, 5.1) before any session exists. Returns null for
   /// a legacy receiver the user explicitly allowed (plaintext behaviour from then on).
   Future<_SecureSend?> _prepareSecure(_SendRun run) async {
-    final peer = await client.info();
+    final peer = await _client.info();
     run.throwIfAborted();
     if (peer.fingerprint.isEmpty) {
       if (security.allowInsecurePeers) return null;
       throw const InsecurePeerException();
     }
-    final c = client;
+    final c = _client;
     final seen = c is SecurePeerClient ? c.serverFingerprint : null;
     if (seen == null) throw const InsecurePeerException();
     final receiverFp = seen.toUpperCase();
@@ -388,7 +409,7 @@ class FileSender {
         notifyPeer: true,
       );
     }
-    final c = client;
+    final c = _client;
     if (c is! SecurePeerClient) throw const InsecurePeerException();
     final SessionStatus revealed;
     try {
@@ -442,7 +463,7 @@ class FileSender {
       final hardCap = Duration(seconds: waitSeconds + 10);
       final poll = Stopwatch()..start();
       try {
-        st = await client
+        st = await _client
             .waitSession(run.sessionId, waitSeconds: waitSeconds)
             .timeout(guard < hardCap ? guard : hardCap);
         transient = 0;
@@ -506,7 +527,8 @@ class FileSender {
     for (var round = 0; ; round++) {
       final state = await _retry(
         run,
-        () => client.fileState(sid, item.fileId, token: token),
+        () => _client.fileState(sid, item.fileId, token: token),
+        switchTier: true,
       );
       if (state.chunkCount != item.chunkCount) {
         throw _SendFailure(
@@ -549,13 +571,14 @@ class FileSender {
       try {
         final v = await _retry(
           run,
-          () => client.completeFile(
+          () => _client.completeFile(
             sid,
             item.fileId,
             token: token,
             sha256: suppliedSha,
           ),
           retryIf: (e) => _isTransient(e) && !_isMissingChunks(e),
+          switchTier: true,
         );
         if (!v.verified) {
           throw _SendFailure(
@@ -610,9 +633,25 @@ class FileSender {
     run.throwIfAborted();
 
     // Stream single-pass chunk buffer for the upload
-    await _retry(
-      run,
-      () => client.putChunk(
+    var attempted = false;
+    await _retry(run, () async {
+      if (attempted) {
+        // A previous attempt failed or its ack was lost: ask the receiver
+        // before re-sending, so an acknowledged chunk is never PUT again.
+        final state = await _client.fileState(
+          run.sessionId,
+          item.fileId,
+          token: token,
+        );
+        if (_receivedSet(
+          state.receivedRanges,
+          item.chunkCount,
+        ).contains(index)) {
+          return;
+        }
+      }
+      attempted = true;
+      await _client.putChunk(
         run.sessionId,
         item.fileId,
         index,
@@ -620,8 +659,8 @@ class FileSender {
         length: r.length,
         chunkSha256: hash,
         token: token,
-      ),
-    );
+      );
+    }, switchTier: true);
     run.bytesSent += r.length;
     progress.done += r.length;
     _emit(
@@ -659,27 +698,55 @@ class FileSender {
   }
 
   /// Retries [op] on transient errors with [retryDelays] (spec §4.4: 3 retries
-  /// at 0.5/1/2 s).
+  /// at 0.5/1/2 s). With [switchTier], once those retries are spent on the
+  /// current tier the send moves to the next one ([nextClient]) and [op] gets
+  /// its own retry budget there.
   Future<T> _retry<T>(
     _SendRun run,
     Future<T> Function() op, {
     bool Function(Object error)? retryIf,
+    bool switchTier = false,
   }) async {
     final shouldRetry = retryIf ?? _isTransient;
-    for (var attempt = 0; ; attempt++) {
+    var attempt = 0;
+    while (true) {
       run.throwIfAborted();
+      final used = _client;
       try {
         return await op();
       } on Object catch (e) {
-        if (attempt >= retryDelays.length || run.aborted || !shouldRetry(e)) {
-          rethrow;
+        if (run.aborted || !shouldRetry(e)) rethrow;
+        if (attempt < retryDelays.length) {
+          _log.fine(
+            'transient ${e.runtimeType}, retry ${attempt + 1}/${retryDelays.length}',
+          );
+          await Future<void>.delayed(retryDelays[attempt]);
+          attempt++;
+          continue;
         }
-        _log.fine(
-          'transient ${e.runtimeType}, retry ${attempt + 1}/${retryDelays.length}',
-        );
-        await Future<void>.delayed(retryDelays[attempt]);
+        if (!switchTier || nextClient == null || !_isTransient(e)) rethrow;
+        await _switchFrom(used);
+        attempt = 0;
       }
     }
+  }
+
+  /// Moves the send from the tier [failed] to the next candidate. A no-op when
+  /// another task already moved on from [failed].
+  Future<void> _switchFrom(PeerClient failed) {
+    if (!identical(failed, _client)) return Future<void>.value();
+    return _switching ??= _moveOn(failed).whenComplete(() => _switching = null);
+  }
+
+  Future<void> _moveOn(PeerClient failed) async {
+    final next = await nextClient!(failed);
+    if (next == null) {
+      throw _SendFailure(
+        FailureReason.noConnection,
+        'every ladder candidate failed mid-transfer',
+      );
+    }
+    _client = next;
   }
 
   static bool _isTransient(Object e) =>
@@ -691,18 +758,33 @@ class FileSender {
   static bool _isMissingChunks(Object e) =>
       e is LsException && e.code == LsErrorCode.missingChunks;
 
-  /// Chunk indices the peer reports as held, clamped to the real chunk count so
-  /// a hostile or buggy `[0, 2^62]` cannot blow up memory.
+  /// Chunk indices the peer reports as held. Every range must be a `[start,
+  /// end]` pair with 0 <= start <= end < chunkCount, and no two ranges may
+  /// overlap; anything else is a protocol error (the peer is lying or broken),
+  /// so nothing is skipped on its strength.
   static Set<int> _receivedSet(ChunkRanges ranges, int chunkCount) {
-    final clamped = <List<int>>[];
+    final valid = <List<int>>[];
     for (final r in ranges) {
-      if (r.length != 2) continue;
-      final lo = math.max(r[0], 0);
-      final hi = math.min(r[1], chunkCount - 1);
-      if (lo <= hi) clamped.add([lo, hi]);
+      if (r.length != 2) throw _badStateRanges(r);
+      final lo = r[0];
+      final hi = r[1];
+      if (lo < 0 || hi >= chunkCount || lo > hi) throw _badStateRanges(r);
+      valid.add([lo, hi]);
     }
-    return expandRanges(clamped);
+    final sorted = [...valid]..sort((a, b) => a[0].compareTo(b[0]));
+    for (var i = 1; i < sorted.length; i++) {
+      if (sorted[i][0] <= sorted[i - 1][1]) {
+        throw _badStateRanges(sorted[i]);
+      }
+    }
+    return expandRanges(valid);
   }
+
+  static _SendFailure _badStateRanges(List<int> range) => _SendFailure(
+    FailureReason.protocolError,
+    'peer /state reports an invalid chunk range $range',
+    notifyPeer: true,
+  );
 
   static _SendFailure _classify(Object e) {
     if (e is _SendFailure) return e;
@@ -741,7 +823,9 @@ class FileSender {
       ),
       LsErrorCode.cancelled => _SendFailure(FailureReason.cancelled, detail),
       LsErrorCode.insufficientStorage => _SendFailure(
-        FailureReason.diskFull,
+        e.message.toLowerCase().contains('folder')
+            ? FailureReason.storageUnusable
+            : FailureReason.diskFull,
         detail,
         notifyPeer: true,
       ),
@@ -787,7 +871,7 @@ class FileSender {
 
   Future<void> _sendCancel(String sessionId) async {
     try {
-      await client.cancel(sessionId).timeout(const Duration(seconds: 5));
+      await _client.cancel(sessionId).timeout(const Duration(seconds: 5));
     } on Object catch (e) {
       _log.fine('cancel request failed: ${e.runtimeType}');
     }

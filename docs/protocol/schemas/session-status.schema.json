@@ -23,9 +23,10 @@
         "NO_CONNECTION",
         "DISK_FULL",
         "PROTOCOL_ERROR",
+        "STORAGE_UNUSABLE",
         null
       ],
-      "description": "FailureReason when status is FAILED, otherwise null/absent."
+      "description": "FailureReason when status is FAILED, otherwise null/absent. STORAGE_UNUSABLE is a sender-local classification (the receiver's download folder is unusable, see LSP-1 section on failure mapping); a receiver does not send it."
     },
     "acceptedFiles": {
       "type": "object",

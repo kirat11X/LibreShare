@@ -1,0 +1,733 @@
+diff --git a/packages/libreshare_core/lib/src/ble/beacon_codec.dart b/packages/libreshare_core/lib/src/ble/beacon_codec.dart
+new file mode 100644
+index 0000000..ecf7fe2
+--- /dev/null
++++ b/packages/libreshare_core/lib/src/ble/beacon_codec.dart
+@@ -0,0 +1,78 @@
++import 'dart:math';
++import 'dart:typed_data';
++
++import 'package:crypto/crypto.dart';
++
++/// Epoch duration for rotating Ephemeral Identifiers (15 minutes).
++const Duration kEidEpochDuration = Duration(minutes: 15);
++const int kEidEpochSeconds = 900;
++const int kEidLength = 8;
++const String kEidHmacPrefix = 'LSBLE1-EID';
++
++/// Derives an 8-byte Ephemeral ID for a given epoch using HMAC-SHA256 (design 03 section 3.3).
++Uint8List deriveEid(List<int> advKey, int epoch) {
++  if (advKey.length != 32) {
++    throw ArgumentError.value(
++      advKey.length,
++      'advKey',
++      'advKey must be exactly 32 bytes',
++    );
++  }
++  final prefixBytes = kEidHmacPrefix.codeUnits;
++  final buffer = ByteData(prefixBytes.length + 8);
++  final uint8 = buffer.buffer.asUint8List();
++  uint8.setRange(0, prefixBytes.length, prefixBytes);
++  // Big-endian 64-bit uint for epoch
++  buffer.setUint64(prefixBytes.length, epoch, Endian.big);
++
++  final hmac = Hmac(sha256, advKey);
++  final digest = hmac.convert(uint8);
++  return Uint8List.fromList(digest.bytes.sublist(0, kEidLength));
++}
++
++/// Computes the 15-minute epoch index for a given timestamp.
++int epochForTime(DateTime time) {
++  final seconds = time.toUtc().millisecondsSinceEpoch ~/ 1000;
++  return seconds ~/ kEidEpochSeconds;
++}
++
++/// Derives the current rotating EID for [advKey] at the specified [time].
++Uint8List generateEidForTime(List<int> advKey, DateTime time) {
++  return deriveEid(advKey, epochForTime(time));
++}
++
++/// Verifies whether [candidateEid] matches [advKey] at [time] within +/- [tolerance] epochs.
++bool matchesEid(
++  List<int> candidateEid,
++  List<int> advKey,
++  DateTime time, {
++  int tolerance = 1,
++}) {
++  if (candidateEid.length != kEidLength || advKey.length != 32) return false;
++  final currentEpoch = epochForTime(time);
++  for (var delta = -tolerance; delta <= tolerance; delta++) {
++    final expected = deriveEid(advKey, currentEpoch + delta);
++    if (_bytesEqual(candidateEid, expected)) {
++      return true;
++    }
++  }
++  return false;
++}
++
++/// Generates a cryptographically secure random 8-byte EID for unpaired / OPEN mode.
++Uint8List generateRandomEid([Random? random]) {
++  final rnd = random ?? Random.secure();
++  final bytes = Uint8List(kEidLength);
++  for (var i = 0; i < kEidLength; i++) {
++    bytes[i] = rnd.nextInt(256);
++  }
++  return bytes;
++}
++
++bool _bytesEqual(List<int> a, List<int> b) {
++  if (a.length != b.length) return false;
++  for (var i = 0; i < a.length; i++) {
++    if (a[i] != b[i]) return false;
++  }
++  return true;
++}
+diff --git a/packages/libreshare_core/lib/src/ble/ble_contracts.dart b/packages/libreshare_core/lib/src/ble/ble_contracts.dart
+index c33a598..3bcca98 100644
+--- a/packages/libreshare_core/lib/src/ble/ble_contracts.dart
++++ b/packages/libreshare_core/lib/src/ble/ble_contracts.dart
+@@ -1,4 +1,8 @@
++export 'beacon_codec.dart';
+ export 'beacon_types.dart';
+ export 'ble_backend.dart';
+ export 'ble_messages.dart';
++export 'gatt_frame_codec.dart';
+ export 'hotspot_backend.dart';
++export 'testing/fake_ble_bus.dart';
++export 'visibility_manager.dart';
+diff --git a/packages/libreshare_core/lib/src/ble/gatt_frame_codec.dart b/packages/libreshare_core/lib/src/ble/gatt_frame_codec.dart
+new file mode 100644
+index 0000000..ae52584
+--- /dev/null
++++ b/packages/libreshare_core/lib/src/ble/gatt_frame_codec.dart
+@@ -0,0 +1,147 @@
++import 'dart:async';
++import 'dart:typed_data';
++
++/// Maximum reassembled application message cap over GATT (2 KiB).
++const int kMaxGattMessageSize = 2048;
++
++/// Default BLE legacy MTU (23 bytes).
++const int kDefaultGattMtu = 23;
++
++/// Inactivity timeout for GATT frame reassembly (5 seconds).
++const Duration kGattReassemblyTimeout = Duration(seconds: 5);
++
++/// Fragments an application message into GATT characteristic frame payloads.
++List<Uint8List> fragmentMessage(
++  List<int> message, {
++  int mtu = kDefaultGattMtu,
++}) {
++  if (message.length > kMaxGattMessageSize) {
++    throw ArgumentError.value(
++      message.length,
++      'message',
++      'Message exceeds maximum GATT message size of $kMaxGattMessageSize bytes',
++    );
++  }
++  // ATT write header is 3 bytes, frame header is 1 byte
++  final maxPayload = mtu - 3 - 1;
++  if (maxPayload < 1) {
++    throw ArgumentError.value(mtu, 'mtu', 'MTU must be at least 5 bytes');
++  }
++
++  if (message.isEmpty) {
++    // Single empty frame (first and last)
++    final frame = Uint8List(1);
++    frame[0] = (1 << 7) | (1 << 6); // isFirst | isLast | seq=0
++    return [frame];
++  }
++
++  final frames = <Uint8List>[];
++  var offset = 0;
++  var seq = 0;
++
++  while (offset < message.length) {
++    final remaining = message.length - offset;
++    final chunkSize = remaining > maxPayload ? maxPayload : remaining;
++    final isFirst = offset == 0;
++    final isLast = offset + chunkSize >= message.length;
++
++    var header = seq & 0x3F;
++    if (isFirst) header |= (1 << 7);
++    if (isLast) header |= (1 << 6);
++
++    final frame = Uint8List(1 + chunkSize);
++    frame[0] = header;
++    frame.setRange(1, 1 + chunkSize, message, offset);
++    frames.add(frame);
++
++    offset += chunkSize;
++    seq = (seq + 1) % 64;
++  }
++
++  return frames;
++}
++
++/// Reassembles GATT frames into whole application messages.
++class GattFrameReassembler {
++  GattFrameReassembler({
++    this.maxMessageSize = kMaxGattMessageSize,
++    this.timeout = kGattReassemblyTimeout,
++  });
++
++  final int maxMessageSize;
++  final Duration timeout;
++
++  final BytesBuilder _buffer = BytesBuilder();
++  int _expectedSeq = 0;
++  bool _inProgress = false;
++  Timer? _timeoutTimer;
++
++  bool get inProgress => _inProgress;
++
++  /// Ingests a raw GATT frame. Returns the reassembled message if this frame completed it,
++  /// or null if more frames are expected.
++  Uint8List? processFrame(List<int> frameBytes) {
++    if (frameBytes.isEmpty) {
++      throw const FormatException('Empty GATT frame received');
++    }
++
++    final header = frameBytes[0];
++    final isFirst = (header & (1 << 7)) != 0;
++    final isLast = (header & (1 << 6)) != 0;
++    final seq = header & 0x3F;
++
++    if (isFirst) {
++      _buffer.clear();
++      _expectedSeq = seq;
++      _inProgress = true;
++    } else if (!_inProgress) {
++      throw const FormatException(
++        'Received continuation frame without preceding first frame',
++      );
++    } else if (seq != _expectedSeq) {
++      reset();
++      throw FormatException(
++        'GATT frame sequence gap: expected $_expectedSeq, got $seq',
++      );
++    }
++
++    _armTimeout();
++
++    final payload = frameBytes.sublist(1);
++    if (_buffer.length + payload.length > maxMessageSize) {
++      reset();
++      throw FormatException(
++        'GATT reassembly buffer exceeded cap of $maxMessageSize bytes',
++      );
++    }
++
++    _buffer.add(payload);
++    _expectedSeq = (_expectedSeq + 1) % 64;
++
++    if (isLast) {
++      final complete = _buffer.takeBytes();
++      reset();
++      return complete;
++    }
++
++    return null;
++  }
++
++  void _armTimeout() {
++    _timeoutTimer?.cancel();
++    _timeoutTimer = Timer(timeout, reset);
++  }
++
++  /// Clears in-progress state and cancels timers.
++  void reset() {
++    _timeoutTimer?.cancel();
++    _timeoutTimer = null;
++    _buffer.clear();
++    _inProgress = false;
++    _expectedSeq = 0;
++  }
++
++  void dispose() {
++    reset();
++  }
++}
+diff --git a/packages/libreshare_core/lib/src/ble/visibility_manager.dart b/packages/libreshare_core/lib/src/ble/visibility_manager.dart
+new file mode 100644
+index 0000000..b9e8ef7
+--- /dev/null
++++ b/packages/libreshare_core/lib/src/ble/visibility_manager.dart
+@@ -0,0 +1,145 @@
++import 'dart:async';
++import 'dart:typed_data';
++
++import '../clock.dart';
++import 'beacon_codec.dart';
++
++enum VisibilityMode { hidden, contacts, everyone }
++
++class VisibilityState {
++  const VisibilityState({
++    required this.mode,
++    required this.activeEid,
++    this.everyoneExpiresAt,
++  });
++
++  final VisibilityMode mode;
++  final Uint8List? activeEid;
++  final DateTime? everyoneExpiresAt;
++
++  bool get isAdvertising => mode != VisibilityMode.hidden;
++}
++
++/// Manages BLE advertising visibility modes and the 10-minute Everyone time-box.
++class VisibilityManager {
++  VisibilityManager({
++    required this.advKey,
++    this.clock = const SystemClock(),
++    this.everyoneDuration = const Duration(minutes: 10),
++  }) {
++    if (advKey.length != 32) {
++      throw ArgumentError.value(
++        advKey.length,
++        'advKey',
++        'advKey must be 32 bytes',
++      );
++    }
++  }
++
++  final Uint8List advKey;
++  final Clock clock;
++  final Duration everyoneDuration;
++
++  VisibilityMode _mode = VisibilityMode.hidden;
++  Uint8List? _activeEid;
++  DateTime? _everyoneExpiresAt;
++  Timer? _everyoneTimer;
++  Timer? _epochTimer;
++
++  final StreamController<VisibilityState> _controller =
++      StreamController<VisibilityState>.broadcast();
++
++  VisibilityState get currentState => VisibilityState(
++    mode: _mode,
++    activeEid: _activeEid != null ? Uint8List.fromList(_activeEid!) : null,
++    everyoneExpiresAt: _everyoneExpiresAt,
++  );
++
++  Stream<VisibilityState> get stateChanges => _controller.stream;
++
++  /// Sets visibility to Hidden (BLE advertising disabled).
++  void setHidden() {
++    _mode = VisibilityMode.hidden;
++    _activeEid = null;
++    _everyoneExpiresAt = null;
++    _cancelTimers();
++    _notify();
++  }
++
++  /// Sets visibility to Contacts (only trusted peers with our advKey can resolve our EID).
++  void setContacts() {
++    _mode = VisibilityMode.contacts;
++    _everyoneExpiresAt = null;
++    _everyoneTimer?.cancel();
++    _everyoneTimer = null;
++    _updateRotatingEid();
++    _armEpochTimer();
++    _notify();
++  }
++
++  /// Sets visibility to Everyone for a strictly time-boxed window (default 10 minutes).
++  void setEveryone({Duration? duration}) {
++    _mode = VisibilityMode.everyone;
++    final dur = duration ?? everyoneDuration;
++    final now = clock.now();
++    _everyoneExpiresAt = now.add(dur);
++    _activeEid = generateRandomEid();
++
++    _everyoneTimer?.cancel();
++    _everyoneTimer = Timer(dur, _onEveryoneExpired);
++
++    _armEpochTimer();
++    _notify();
++  }
++
++  void _onEveryoneExpired() {
++    if (_mode == VisibilityMode.everyone) {
++      // Revert to contacts mode upon expiration
++      setContacts();
++    }
++  }
++
++  void _updateRotatingEid() {
++    if (_mode == VisibilityMode.contacts) {
++      _activeEid = generateEidForTime(advKey, clock.now());
++    } else if (_mode == VisibilityMode.everyone) {
++      _activeEid = generateRandomEid();
++    }
++  }
++
++  void _armEpochTimer() {
++    _epochTimer?.cancel();
++    final now = clock.now();
++    final currentEpoch = epochForTime(now);
++    final nextEpochSeconds = (currentEpoch + 1) * kEidEpochSeconds;
++    final nextEpochTime = DateTime.fromMillisecondsSinceEpoch(
++      nextEpochSeconds * 1000,
++      isUtc: true,
++    );
++    final delay = nextEpochTime.difference(now.toUtc());
++    _epochTimer = Timer(delay.isNegative ? Duration.zero : delay, () {
++      if (_mode != VisibilityMode.hidden) {
++        _updateRotatingEid();
++        _notify();
++        _armEpochTimer();
++      }
++    });
++  }
++
++  void _cancelTimers() {
++    _everyoneTimer?.cancel();
++    _everyoneTimer = null;
++    _epochTimer?.cancel();
++    _epochTimer = null;
++  }
++
++  void _notify() {
++    _controller.add(currentState);
++  }
++
++  /// Disposes timers and streams.
++  void dispose() {
++    _cancelTimers();
++    _controller.close();
++  }
++}
+diff --git a/packages/libreshare_core/lib/src/ble/testing/fake_ble_bus.dart b/packages/libreshare_core/lib/src/ble/testing/fake_ble_bus.dart
+new file mode 100644
+index 0000000..6a543aa
+--- /dev/null
++++ b/packages/libreshare_core/lib/src/ble/testing/fake_ble_bus.dart
+@@ -0,0 +1,326 @@
++import 'dart:async';
++import 'dart:typed_data';
++
++import '../beacon_types.dart';
++import '../ble_backend.dart';
++import '../gatt_frame_codec.dart';
++
++/// One active advertisement on the fake bus.
++class FakeBleAdvertisement {
++  const FakeBleAdvertisement({
++    required this.deviceId,
++    required this.address,
++    this.name,
++    required this.beacon,
++    required this.rssi,
++    required this.connectable,
++  });
++
++  final String deviceId;
++  final String address;
++  final String? name;
++  final BleBeacon beacon;
++  final int rssi;
++  final bool connectable;
++}
++
++/// In-memory simulated Bluetooth Low Energy medium.
++class FakeBleBus {
++  FakeBleBus({
++    this.defaultMtu = kDefaultGattMtu,
++    this.simulatedLatency = Duration.zero,
++  });
++
++  final int defaultMtu;
++  final Duration simulatedLatency;
++
++  final Map<String, FakeBleAdvertisement> _advertisements = {};
++  final Map<String, FakeBleGattServer> _servers = {};
++  final List<StreamController<BleDevice>> _activeScanners = [];
++
++  /// Registers or updates an active advertisement on the bus.
++  void advertise(FakeBleAdvertisement ad) {
++    _advertisements[ad.deviceId] = ad;
++    _broadcastToScanners(ad);
++  }
++
++  /// Removes an active advertisement.
++  void stopAdvertising(String deviceId) {
++    _advertisements.remove(deviceId);
++  }
++
++  void _broadcastToScanners(FakeBleAdvertisement ad) {
++    final dev = BleDevice(
++      id: ad.deviceId,
++      name: ad.name,
++      rssi: ad.rssi,
++      beacon: ad.beacon,
++      address: ad.address,
++    );
++    for (final scanner in List.of(_activeScanners)) {
++      if (!scanner.isClosed) {
++        scanner.add(dev);
++      }
++    }
++  }
++
++  Stream<BleDevice> createScanStream(
++    String scannerId, {
++    BleScanFilter? filter,
++  }) {
++    late final StreamController<BleDevice> controller;
++    controller = StreamController<BleDevice>(
++      onListen: () {
++        _activeScanners.add(controller);
++        // Immediately yield currently active advertisements that match filter
++        for (final ad in _advertisements.values) {
++          if (ad.deviceId == scannerId) continue; // don't hear self
++          if (filter != null &&
++              filter.companyId != null &&
++              ad.beacon.companyId != filter.companyId) {
++            continue;
++          }
++          final dev = BleDevice(
++            id: ad.deviceId,
++            name: ad.name,
++            rssi: ad.rssi,
++            beacon: ad.beacon,
++            address: ad.address,
++          );
++          controller.add(dev);
++        }
++      },
++      onCancel: () {
++        _activeScanners.remove(controller);
++      },
++    );
++    return controller.stream;
++  }
++
++  /// Registers a GATT server on the bus.
++  void registerServer(String deviceId, FakeBleGattServer server) {
++    _servers[deviceId] = server;
++  }
++
++  void unregisterServer(String deviceId) {
++    _servers.remove(deviceId);
++  }
++
++  /// Connects to a registered target GATT server.
++  Future<BleGattSession> connect(
++    String clientDeviceId,
++    String targetDeviceId, {
++    Duration timeout = const Duration(seconds: 10),
++  }) async {
++    final server = _servers[targetDeviceId];
++    if (server == null || !server.isRunning) {
++      throw TimeoutException(
++        'No active GATT server found for device $targetDeviceId',
++        timeout,
++      );
++    }
++
++    final clientToTarget = StreamController<List<int>>();
++    final targetToClient = StreamController<List<int>>();
++
++    final clientSession = FakeBleGattSession._(
++      outbound: clientToTarget,
++      inbound: targetToClient.stream,
++      latency: simulatedLatency,
++    );
++
++    final serverSession = FakeBleGattSession._(
++      outbound: targetToClient,
++      inbound: clientToTarget.stream,
++      latency: simulatedLatency,
++    );
++
++    server._acceptSession(serverSession);
++    return clientSession;
++  }
++
++  /// Creates a [BleBackend] attached to this bus.
++  FakeBleBackend createBackend({
++    required String deviceId,
++    required String address,
++    String? name,
++    int rssi = -60,
++  }) {
++    return FakeBleBackend._(
++      bus: this,
++      deviceId: deviceId,
++      address: address,
++      name: name,
++      rssi: rssi,
++    );
++  }
++}
++
++/// Simulated GATT session endpoint.
++class FakeBleGattSession implements BleGattSession {
++  FakeBleGattSession._({
++    required this.outbound,
++    required this.inbound,
++    required this.latency,
++  });
++
++  final StreamController<List<int>> outbound;
++  final Stream<List<int>> inbound;
++  final Duration latency;
++  bool _closed = false;
++
++  @override
++  bool get isClosed => _closed;
++
++  @override
++  Stream<List<int>> get received => inbound;
++
++  @override
++  Future<void> send(List<int> data) async {
++    if (_closed) throw StateError('GATT session is closed');
++    final copy = Uint8List.fromList(data);
++    if (latency > Duration.zero) {
++      await Future<void>.delayed(latency);
++    }
++    if (!_closed && !outbound.isClosed) {
++      outbound.add(copy);
++    }
++  }
++
++  @override
++  Future<void> close() async {
++    if (_closed) return;
++    _closed = true;
++    if (!outbound.isClosed) {
++      await outbound.close();
++    }
++  }
++}
++
++/// Simulated peripheral GATT server.
++class FakeBleGattServer implements BleGattServer {
++  FakeBleGattServer._(this._bus, this._deviceId);
++
++  final FakeBleBus _bus;
++  final String _deviceId;
++  bool _running = false;
++  final StreamController<BleGattSession> _incoming =
++      StreamController<BleGattSession>.broadcast();
++
++  @override
++  bool get isRunning => _running;
++
++  @override
++  Stream<BleGattSession> get incomingSessions => _incoming.stream;
++
++  @override
++  Future<void> start() async {
++    _running = true;
++    _bus.registerServer(_deviceId, this);
++  }
++
++  @override
++  Future<void> stop() async {
++    _running = false;
++    _bus.unregisterServer(_deviceId);
++  }
++
++  void _acceptSession(FakeBleGattSession session) {
++    if (_running && !_incoming.isClosed) {
++      _incoming.add(session);
++    }
++  }
++
++  void dispose() {
++    _running = false;
++    _bus.unregisterServer(_deviceId);
++    _incoming.close();
++  }
++}
++
++/// In-memory fake implementation of [BleBackend].
++class FakeBleBackend implements BleBackend {
++  FakeBleBackend._({
++    required this.bus,
++    required this.deviceId,
++    required this.address,
++    this.name,
++    this.rssi = -60,
++  }) : _server = FakeBleGattServer._(bus, deviceId);
++
++  final FakeBleBus bus;
++  final String deviceId;
++  final String address;
++  final String? name;
++  final int rssi;
++
++  final FakeBleGattServer _server;
++  bool _advertising = false;
++  bool _scanning = false;
++  StreamSubscription<BleDevice>? _scanSub;
++
++  @override
++  BleGattServer get gattServer => _server;
++
++  @override
++  bool get isAdvertising => _advertising;
++
++  @override
++  bool get isScanning => _scanning;
++
++  @override
++  Future<void> startAdvertising(
++    BleBeacon beacon, {
++    bool connectable = false,
++  }) async {
++    _advertising = true;
++    if (connectable) {
++      await _server.start();
++      bus.registerServer(deviceId, _server);
++    }
++    bus.advertise(
++      FakeBleAdvertisement(
++        deviceId: deviceId,
++        address: address,
++        name: name,
++        beacon: beacon,
++        rssi: rssi,
++        connectable: connectable,
++      ),
++    );
++  }
++
++  @override
++  Future<void> stopAdvertising() async {
++    _advertising = false;
++    bus.stopAdvertising(deviceId);
++  }
++
++  @override
++  Stream<BleDevice> scan({BleScanFilter? filter}) {
++    _scanning = true;
++    return bus.createScanStream(deviceId, filter: filter);
++  }
++
++  @override
++  Future<void> stopScan() async {
++    _scanning = false;
++    await _scanSub?.cancel();
++    _scanSub = null;
++  }
++
++  @override
++  Future<BleGattSession> connectGatt(
++    String targetDeviceId, {
++    Duration timeout = const Duration(seconds: 10),
++  }) async {
++    return bus.connect(deviceId, targetDeviceId, timeout: timeout);
++  }
++
++  Future<void> dispose() async {
++    await stopAdvertising();
++    await stopScan();
++    await _server.stop();
++    _server.dispose();
++  }
++}

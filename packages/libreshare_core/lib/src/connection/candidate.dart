@@ -23,7 +23,10 @@ enum CandidateKind {
   loopback('loopback', defaultCostHint: 5),
 
   /// Encrypted relay tunnel (reserved for Increment 5).
-  tunnel('tunnel', defaultCostHint: 100);
+  tunnel('tunnel', defaultCostHint: 100),
+
+  /// Local Wi-Fi hotspot ad-hoc network (Increment 7).
+  hotspot('hotspot', defaultCostHint: 15);
 
   const CandidateKind(this.wire, {required this.defaultCostHint});
 
@@ -242,4 +245,112 @@ class Candidate implements Comparable<Candidate> {
   @override
   String toString() =>
       'Candidate($id, kind=$kind, host=$host:$port, cost=$costHint, rtt=${rtt?.inMilliseconds}ms)';
+
+  /// Budget allowed for candidate physical/medium setup prior to socket connection.
+  Duration get setupBudget => const Duration(seconds: 0);
+
+  /// Budget allowed for TCP and TLS handshake.
+  Duration get connectBudget => const Duration(seconds: 3);
+
+  /// Asynchronous hook to prepare candidate medium (e.g. Wi-Fi join or host AP).
+  Future<void> setup() async {}
+
+  /// Asynchronous hook to release candidate medium and restore network state.
+  Future<void> teardown() async {}
+}
+
+/// Role in a Wi-Fi hotspot handoff (host or join).
+enum HotspotRole {
+  host('host'),
+  join('join');
+
+  const HotspotRole(this.wire);
+  final String wire;
+
+  static HotspotRole fromWire(String wire) {
+    for (final r in values) {
+      if (r.wire == wire) return r;
+    }
+    throw ArgumentError.value(wire, 'wire', 'Unknown hotspot role');
+  }
+}
+
+/// Candidate network path traversing a temporary Wi-Fi hotspot (Increment 7).
+class HotspotCandidate extends Candidate {
+  HotspotCandidate({
+    required super.id,
+    required super.host,
+    required super.port,
+    required super.peerFingerprint,
+    required this.role,
+    required this.ssid,
+    required this.psk,
+    required this.validUntil,
+    required this.offerId,
+    super.costHint = 15,
+    super.lastSuccess,
+    super.rtt,
+    this.onSetup,
+    this.onTeardown,
+  }) : super(kind: CandidateKind.hotspot);
+
+  final HotspotRole role;
+  final String ssid;
+  final String psk;
+  final DateTime validUntil;
+  final String offerId;
+  final Future<void> Function()? onSetup;
+  final Future<void> Function()? onTeardown;
+
+  @override
+  Duration get setupBudget => role == HotspotRole.join
+      ? const Duration(seconds: 90)
+      : const Duration(seconds: 10);
+
+  @override
+  Duration get connectBudget => const Duration(seconds: 5);
+
+  @override
+  Future<void> setup() async => onSetup?.call();
+
+  @override
+  Future<void> teardown() async => onTeardown?.call();
+
+  @override
+  Map<String, Object?> toJson() => {
+    ...super.toJson(),
+    'role': role.wire,
+    'ssid': ssid,
+    'offerId': offerId,
+    'validUntil': validUntil.toUtc().toIso8601String(),
+  };
+
+  factory HotspotCandidate.fromJson(
+    Map<String, Object?> json, {
+    required String psk,
+    Future<void> Function()? onSetup,
+    Future<void> Function()? onTeardown,
+  }) {
+    return HotspotCandidate(
+      id: json['id']! as String,
+      host: json['host']! as String,
+      port: json['port']! as int,
+      peerFingerprint: json['peerFingerprint']! as String,
+      role: HotspotRole.fromWire(json['role']! as String),
+      ssid: json['ssid']! as String,
+      psk: psk,
+      validUntil: DateTime.parse(json['validUntil']! as String),
+      offerId: json['offerId']! as String,
+      costHint:
+          (json['costHint'] as int?) ?? CandidateKind.hotspot.defaultCostHint,
+      lastSuccess: json['lastSuccess'] != null
+          ? DateTime.parse(json['lastSuccess']! as String)
+          : null,
+      rtt: json['rttMs'] != null
+          ? Duration(milliseconds: json['rttMs']! as int)
+          : null,
+      onSetup: onSetup,
+      onTeardown: onTeardown,
+    );
+  }
 }

@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://libreshare.org/schemas/tunnel-offer.schema.json",
+  "title": "TunnelOffer",
+  "type": "object",
+  "required": ["provider", "url", "keyB64", "expiresAt"],
+  "properties": {
+    "provider": {
+      "type": "string",
+      "enum": ["cloudflare-quick", "zrok", "manual-url", "fake"]
+    },
+    "url": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://.+/t/[A-Za-z0-9_-]+$"
+    },
+    "keyB64": {
+      "type": "string",
+      "description": "32-byte root encryption key k encoded in base64url without padding."
+    },
+    "expiresAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "maxReceivers": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000,
+      "default": 1
+    },
+    "pin": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{32}$",
+      "description": "First 32 hex chars of SHA-256(DER) of ephemeral origin certificate (direct tiers)."
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "description": "Direct origin candidates in host:port format."
+      }
+    }
+  },
+  "additionalProperties": false
+}

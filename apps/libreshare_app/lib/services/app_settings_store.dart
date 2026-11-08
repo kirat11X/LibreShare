@@ -21,6 +21,7 @@ class AppSettings {
     this.storageAsked = false,
     this.pinMode = PinMode.off,
     this.hardwareHashingEnabled = false,
+    this.speedMode = kDefaultSpeedMode,
   });
 
   /// Stable UUID of this installation.
@@ -44,6 +45,9 @@ class AppSettings {
   /// Whether hardware-accelerated SHA-256 is enabled (Option 2).
   final bool hardwareHashingEnabled;
 
+  /// Transfer speed of sends from this device (eco, balanced, turbo).
+  final SpeedMode speedMode;
+
   AppSettings copyWith({
     String? deviceId,
     String? alias,
@@ -53,6 +57,7 @@ class AppSettings {
     bool? storageAsked,
     PinMode? pinMode,
     bool? hardwareHashingEnabled,
+    SpeedMode? speedMode,
   }) => AppSettings(
     deviceId: deviceId ?? this.deviceId,
     alias: alias ?? this.alias,
@@ -62,6 +67,7 @@ class AppSettings {
     pinMode: pinMode ?? this.pinMode,
     hardwareHashingEnabled:
         hardwareHashingEnabled ?? this.hardwareHashingEnabled,
+    speedMode: speedMode ?? this.speedMode,
   );
 
   Map<String, Object?> toJson() => {
@@ -73,6 +79,7 @@ class AppSettings {
     'storageAsked': storageAsked,
     'pinMode': pinMode.name,
     if (hardwareHashingEnabled) 'hardwareHashing': true,
+    'speedMode': speedMode.name,
   };
 
   @override
@@ -84,7 +91,8 @@ class AppSettings {
       other.preferredPort == preferredPort &&
       other.storageAsked == storageAsked &&
       other.pinMode == pinMode &&
-      other.hardwareHashingEnabled == hardwareHashingEnabled;
+      other.hardwareHashingEnabled == hardwareHashingEnabled &&
+      other.speedMode == speedMode;
 
   @override
   int get hashCode => Object.hash(
@@ -95,6 +103,7 @@ class AppSettings {
     storageAsked,
     pinMode,
     hardwareHashingEnabled,
+    speedMode,
   );
 }
 
@@ -147,6 +156,12 @@ class AppSettingsStore {
       storageAsked: asked is bool && asked,
       pinMode: mode,
       hardwareHashingEnabled: hw,
+      // An unknown or missing value reads as the default, never an error.
+      speedMode:
+          parseSpeedMode(
+            j['speedMode'] is String ? j['speedMode'] as String : null,
+          ) ??
+          kDefaultSpeedMode,
     );
     if (id is! String) await save(settings);
     return settings;

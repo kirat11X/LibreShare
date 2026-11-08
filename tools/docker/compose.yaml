@@ -31,6 +31,8 @@ services:
         ipv4_address: 172.28.5.240
       wifi_net:
         ipv4_address: 172.28.6.240
+      inet_net:
+        ipv4_address: 172.28.7.240
 
   bob:
     <<: *ls
@@ -43,6 +45,8 @@ services:
         ipv4_address: 172.28.5.250
       wifi_net:
         ipv4_address: 172.28.6.250
+      inet_net:
+        ipv4_address: 172.28.7.250
 
   carol:
     <<: *ls
@@ -76,11 +80,29 @@ services:
       lan_net:
         ipv4_address: 172.28.5.210
 
+  gateway:
+    <<: *ls
+    user: "0:0"
+    cap_add: [NET_ADMIN]
+    command: ["/bin/sh", "-c", "iptables -t nat -A POSTROUTING -j MASQUERADE && tail -f /dev/null"]
+    networks:
+      lan_net:
+        ipv4_address: 172.28.5.254
+      inet_net:
+        ipv4_address: 172.28.7.254
+
+  relay:
+    <<: *ls
+    command: ["/bin/sh", "-c", "tail -f /dev/null"]
+    networks:
+      inet_net:
+        ipv4_address: 172.28.7.253
+
   tester:
     <<: *ls
     user: "0:0"
     cap_add: [NET_ADMIN]
-    depends_on: [alice, bob, carol, dave, legacy]
+    depends_on: [alice, bob, carol, dave, legacy, gateway, relay]
     command: ["/usr/local/bin/e2e.sh"]
     environment:
       ALICE_IP: 172.28.5.240
@@ -88,6 +110,10 @@ services:
       CAROL_IP: 172.28.5.230
       DAVE_IP: 172.28.5.220
       LEGACY_IP: 172.28.5.210
+      GATEWAY_IP: 172.28.5.254
+      RELAY_IP: 172.28.7.253
+      INET_ALICE_IP: 172.28.7.240
+      INET_BOB_IP: 172.28.7.250
       BENCH_MIB: "${BENCH_MIB:-1024}"
     volumes:
       - alice_data:/alice-data:ro
@@ -99,6 +125,8 @@ services:
         ipv4_address: 172.28.5.10
       wifi_net:
         ipv4_address: 172.28.6.10
+      inet_net:
+        ipv4_address: 172.28.7.10
 
 networks:
   lan_net:
@@ -113,6 +141,12 @@ networks:
       config:
         - subnet: 172.28.6.0/24
           gateway: 172.28.6.1
+  inet_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.7.0/24
+          gateway: 172.28.7.1
 
 volumes:
   alice_data:

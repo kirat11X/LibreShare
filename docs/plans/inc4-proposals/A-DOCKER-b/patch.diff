@@ -1,0 +1,36 @@
+--- a/tools/docker/e2e.sh
++++ b/tools/docker/e2e.sh
+@@ -54,10 +54,21 @@
+ 
+ # --- iptables: the rule is always removed again, even if the script dies ---------------------------
+ IPT=iptables
+-RULE=(INPUT -p udp --dport "$PORT" -j DROP)
++RULE_DPORT=(INPUT -p udp --dport "$PORT" -j DROP)
++RULE_SPORT=(INPUT -p udp --sport "$PORT" -j DROP)
+ RULE_ON=0
+-drop_udp()  { "$IPT" -A "${RULE[@]}"; RULE_ON=1; }
+-undo_drop() { if ((RULE_ON)); then "$IPT" -D "${RULE[@]}" 2>/dev/null || true; RULE_ON=0; fi; }
++drop_udp() {
++  "$IPT" -A "${RULE_DPORT[@]}"
++  "$IPT" -A "${RULE_SPORT[@]}"
++  RULE_ON=1
++}
++undo_drop() {
++  if ((RULE_ON)); then
++    "$IPT" -D "${RULE_DPORT[@]}" 2>/dev/null || true
++    "$IPT" -D "${RULE_SPORT[@]}" 2>/dev/null || true
++    RULE_ON=0
++  fi
++}
+ dropped_pkts() { "$IPT" -nvxL INPUT | awk -v p="dpt:$PORT" '$0 ~ p {print $1; exit}'; }
+ BG_PIDS=()
+ cleanup() {
+@@ -141,7 +152,7 @@
+ file_in_alice() { [[ -f $ALICE_DATA/$FILE_NAME ]]; }
+ mib_per_s() { sed -nE 's/.*\(([0-9.]+) MiB\/s\).*/\1/p' <<<"$1"; }
+ secs_of()   { sed -nE 's/.* bytes in ([0-9.]+)s .*/\1/p' <<<"$1"; }
+-rule_absent() { ! "$IPT" -S INPUT | grep -q -- "--dport $PORT -j DROP"; }
++rule_absent() { ! "$IPT" -S INPUT | grep -q -- "-p udp.*$PORT -j DROP"; }
+ send_found_nothing() { # exit code (args 1) is non-zero and the output says no device matched
+   [[ $1 -ne 0 ]] && grep -q 'no device matching' <<<"$2"
+ }

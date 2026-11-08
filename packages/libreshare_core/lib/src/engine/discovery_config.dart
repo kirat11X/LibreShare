@@ -3,6 +3,11 @@
 /// engines in one process without UDP 53318 or a real LAN.
 library;
 
+import 'dart:typed_data';
+
+import '../ble/ble_backend.dart';
+import '../ble/ble_coordinator.dart';
+import '../ble/visibility_manager.dart';
 import '../discovery/mdns_backend.dart';
 import '../discovery/multicast_transport.dart';
 import '../discovery/network_interfaces.dart';
@@ -27,6 +32,10 @@ class DiscoveryConfig {
     this.interfacePoll = const Duration(seconds: 5),
     this.registerTimeout = const Duration(seconds: 2),
     this.peerExpiry = const Duration(seconds: 90),
+    this.bleBackend,
+    this.bleVisibility,
+    this.advKey,
+    this.onBleTransferPrompt,
   });
 
   /// No multicast, no automatic scan, no mDNS. The engine still resolves
@@ -77,4 +86,16 @@ class DiscoveryConfig {
 
   /// A peer not heard from for this long is dropped (spec: 90 s).
   final Duration peerExpiry;
+
+  /// Optional BLE backend for out-of-band discovery & transfer handoff (Increment 7).
+  final BleBackend? bleBackend;
+
+  /// Optional preconfigured visibility manager for BLE advertising.
+  final VisibilityManager? bleVisibility;
+
+  /// Optional 32-byte shared beacon derivation key (advKey).
+  final Uint8List? advKey;
+
+  /// Transfer prompt consent handler for incoming BLE transfer offers.
+  final Future<bool> Function(BleTransferPrompt prompt)? onBleTransferPrompt;
 }

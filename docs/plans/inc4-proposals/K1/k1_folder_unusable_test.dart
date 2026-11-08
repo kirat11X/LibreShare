@@ -96,28 +96,32 @@ Text textOf(WidgetTester tester, String key) =>
 
 void main() {
   group('FailureReason.storageUnusable string formatting', () {
-    test('failureText formats FailureReason.storageUnusable to distinct message', () {
-      final t = view(failure: FailureReason.storageUnusable);
-      expect(
-        failureText(t),
-        'The download folder on the receiving device is not usable or unwritable.',
-      );
-    });
-
-    testWidgets('TransferScreen displays distinct message for FailureReason.storageUnusable', (
-      tester,
-    ) async {
-      final store = StubTransfers([
-        view(failure: FailureReason.storageUnusable),
-      ]);
-      await pumpTransfer(tester, store);
-      expect(
-        find.text(
+    test(
+      'failureText formats FailureReason.storageUnusable to distinct message',
+      () {
+        final t = view(failure: FailureReason.storageUnusable);
+        expect(
+          failureText(t),
           'The download folder on the receiving device is not usable or unwritable.',
-        ),
-        findsOneWidget,
-      );
-    });
+        );
+      },
+    );
+
+    testWidgets(
+      'TransferScreen displays distinct message for FailureReason.storageUnusable',
+      (tester) async {
+        final store = StubTransfers([
+          view(failure: FailureReason.storageUnusable),
+        ]);
+        await pumpTransfer(tester, store);
+        expect(
+          find.text(
+            'The download folder on the receiving device is not usable or unwritable.',
+          ),
+          findsOneWidget,
+        );
+      },
+    );
   });
 
   group('SettingsScreen folder picking writability validation', () {

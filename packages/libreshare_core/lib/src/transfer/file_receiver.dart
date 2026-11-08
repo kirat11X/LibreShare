@@ -40,6 +40,7 @@ import '../server/incoming_transfer_handler.dart';
 import '../storage/atomic_file.dart';
 import 'chunker.dart';
 import 'filename_sanitizer.dart';
+import 'hashing.dart';
 import 'resume_store.dart';
 
 final Logger _log = Logger('FileReceiver');
@@ -75,8 +76,7 @@ class _FileEntry {
   FileVerification? verification;
   Future<FileVerification>? completion;
 
-  _DigestCapture? runningCapture;
-  ByteConversionSink? runningHasher;
+  Sha256Incremental? runningHasher;
   int nextExpectedChunkIndex = 0;
   bool canUseRunningHash = true;
 }
@@ -108,12 +108,22 @@ class _Session {
   final List<Completer<void>> waiters = [];
 }
 
-class _DigestCapture implements Sink<Digest> {
-  Digest? value;
-  @override
-  void add(Digest data) => value = data;
-  @override
-  void close() {}
+/// Drops the running whole-file digest, if any, and frees its native state.
+void _releaseRunningHash(_FileEntry f) {
+  final h = f.runningHasher;
+  f.runningHasher = null;
+  h?.dispose();
+}
+
+/// Finishes the running whole-file digest and frees its native state.
+String _finishRunningHash(_FileEntry f) {
+  final h = f.runningHasher!;
+  f.runningHasher = null;
+  try {
+    return h.finishHex();
+  } finally {
+    h.dispose();
+  }
 }
 
 class FileReceiver implements SecureTransferHandler {
@@ -699,23 +709,18 @@ class FileReceiver implements SecureTransferHandler {
     _requireInProgress(s);
     final already = store.has(index);
 
-    final capture = _DigestCapture();
-    final hasher = sha256.startChunkedConversion(capture);
-    var received = 0;
-    RandomAccessFile? raf;
-
     final inOrderForRunning =
         f.canUseRunningHash && index == f.nextExpectedChunkIndex && !already;
     if (inOrderForRunning) {
-      f.runningHasher ??= sha256.startChunkedConversion(
-        f.runningCapture = _DigestCapture(),
-      );
+      f.runningHasher ??= newSha256Incremental();
     } else {
       f.canUseRunningHash = false;
-      f.runningHasher?.close();
-      f.runningHasher = null;
-      f.runningCapture = null;
+      _releaseRunningHash(f);
     }
+    final hasher = newSha256Incremental();
+    var received = 0;
+    var chunkOk = false;
+    RandomAccessFile? raf;
 
     try {
       if (!already) {
@@ -744,13 +749,11 @@ class FileReceiver implements SecureTransferHandler {
           'chunk $index has $received of $expected bytes',
         );
       }
-      hasher.close();
-      if (expectedHash != null && capture.value.toString() != expectedHash) {
+      final chunkHex = hasher.finishHex();
+      if (expectedHash != null && chunkHex != expectedHash) {
         if (inOrderForRunning) {
           f.canUseRunningHash = false;
-          f.runningHasher?.close();
-          f.runningHasher = null;
-          f.runningCapture = null;
+          _releaseRunningHash(f);
         }
         throw LsException(
           LsErrorCode.chunkHashMismatch,
@@ -760,6 +763,7 @@ class FileReceiver implements SecureTransferHandler {
       if (inOrderForRunning) {
         f.nextExpectedChunkIndex++;
       }
+      chunkOk = true;
     } on FileSystemException catch (e) {
       if (s.status != TransferStatus.inProgress) _throwStateError(s);
       if (_isDiskFull(e)) {
@@ -772,6 +776,13 @@ class FileReceiver implements SecureTransferHandler {
       _log.warning('chunk write failed: ${e.message}');
       throw LsException(LsErrorCode.internal, 'chunk write failed');
     } finally {
+      hasher.dispose();
+      if (!chunkOk && inOrderForRunning) {
+        // The running hash absorbed part of this chunk; a retry would feed it
+        // again. Drop it so the final check re-hashes the file instead.
+        f.canUseRunningHash = false;
+        _releaseRunningHash(f);
+      }
       await raf?.close();
       if (s.status == TransferStatus.failed &&
           s.failureReason == FailureReason.cancelled &&
@@ -864,19 +875,7 @@ class FileReceiver implements SecureTransferHandler {
       } else {
         await _syncFile(f.partial);
       }
-      final length = f.partial.existsSync() ? f.partial.lengthSync() : -1;
-      final String actual;
-      if (length != item.size) {
-        actual = 'size-mismatch';
-      } else if (f.canUseRunningHash &&
-          f.nextExpectedChunkIndex == item.chunkCount &&
-          f.runningCapture != null) {
-        f.runningHasher?.close();
-        actual = f.runningCapture!.value.toString();
-      } else {
-        final path = f.partial.path;
-        actual = await Isolate.run(() => _sha256OfFile(path));
-      }
+      final actual = await _actualHash(f);
       _requireInProgress(s); // cancelled while hashing?
 
       if (actual != expectedHash) {
@@ -918,6 +917,26 @@ class FileReceiver implements SecureTransferHandler {
       }
       _log.warning('completing a file of session ${_short(s.id)} failed');
       throw LsException(LsErrorCode.internal, 'could not save file');
+    }
+  }
+
+  /// SHA-256 of the partial file: the running digest when it saw every byte in
+  /// order, else a re-hash in an isolate. The running digest is released on
+  /// every path.
+  Future<String> _actualHash(_FileEntry f) async {
+    try {
+      final item = f.item;
+      final length = f.partial.existsSync() ? f.partial.lengthSync() : -1;
+      if (length != item.size) return 'size-mismatch';
+      if (f.canUseRunningHash &&
+          f.nextExpectedChunkIndex == item.chunkCount &&
+          f.runningHasher != null) {
+        return _finishRunningHash(f);
+      }
+      final path = f.partial.path;
+      return await Isolate.run(() => sha256OfPathStreamed(path));
+    } finally {
+      _releaseRunningHash(f);
     }
   }
 
@@ -1068,6 +1087,9 @@ class FileReceiver implements SecureTransferHandler {
     s.sasTimer = null;
     _wake(s);
     if (st.isTerminal) {
+      for (final f in s.files.values) {
+        _releaseRunningHash(f);
+      }
       _release(s);
       _notifyActive();
       if (st == TransferStatus.failed && reason != FailureReason.cancelled) {
@@ -1356,9 +1378,7 @@ class FileReceiver implements SecureTransferHandler {
 
   Future<void> _discard(_FileEntry f) async {
     f.discarded = true;
-    f.runningHasher?.close();
-    f.runningHasher = null;
-    f.runningCapture = null;
+    _releaseRunningHash(f);
     f.canUseRunningHash = false;
     final store = f.store;
     if (store != null) {
@@ -1442,12 +1462,6 @@ void _deleteQuietly(File f) {
   } on FileSystemException {
     // best effort
   }
-}
-
-/// Streaming SHA-256 of a file; runs inside a background isolate.
-Future<String> _sha256OfFile(String path) async {
-  final digest = await sha256.bind(File(path).openRead()).first;
-  return digest.toString();
 }
 
 final RegExp _dfLine = RegExp(

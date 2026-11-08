@@ -1,21 +1,12 @@
-# Increment 4 P4-7 Engine & CLI Wiring Report
+# Increment 4 Card P4-7 Report (ALREADY IN TREE)
 
-**Role:** Card C2 / P4-7 Engine & CLI Wiring Specialist  
-**Status:** PASSED (75/75 CLI unit tests green, analyze rc=0, format rc=0)
+**Card:** P4-7 (Engine & CLI Wiring: beginSendToCandidates, candidatesForDevice, CLI --candidate)  
+**Status:** ALREADY IN TREE (Engine & CLI wiring committed; test evidence and verifier report shipped)  
 
-## 1. Summary of Work Delivered
-Card P4-7 wires the Increment 4 multi-tier connection architecture through the core `LibreshareEngine` and the CLI application:
-- `LibreshareEngine`:
-  - Added `beginSendToCandidates` API accepting explicit candidates list and fallback toggle.
-  - Added `candidatesForDevice(DiscoveredDevice)` extracting primary and secondary endpoints from device announcement.
-  - Implemented `_findEndpointWithLadder` invoking `ConnectionManager` with candidate priority ladder and tier probe budgets.
-  - Integrated `EventLog` telemetry recording ladder transitions and fallback attempts.
-- `ls_cli.dart`:
-  - Added `--candidate` option to `send` command allowing user to specify candidate kind (`wifi`, `lan`, `loopback`) or explicit `host:port`.
-  - Added `--fallback` / `--no-fallback` flag controls.
-  - Added interactive CLI feedback on `ChannelTierSwitched` events notifying users when connection falls back across tiers.
-
-## 2. Quality Gate Verification
-- `dart test packages/libreshare_cli/test/`: 75/75 passed (rc=0).
-- `dart analyze packages/libreshare_core/lib/ packages/libreshare_cli/lib/`: 0 errors, 0 warnings (rc=0).
-- `dart format --output=none --set-exit-if-changed packages/libreshare_cli/`: 0 changed (rc=0).
+## Quality & Evidence
+- `dart test packages/libreshare_cli/test/`
+  Output: `00:45 +76 ~2: All tests passed!` (`rc=0`)
+- `dart analyze packages/libreshare_cli/ packages/libreshare_core/lib/src/engine/`: 0 issues (`rc=0`)
+- `dart format --output=none --set-exit-if-changed packages/libreshare_cli/`: 0 changed (`rc=0`)
+- 4/4 mutations killed (`M1_KILLED`..`M4_KILLED`) in `verifier-report.md`.
+- Production files untouched (no changes to `libreshare_engine.dart` or `file_sender.dart`).

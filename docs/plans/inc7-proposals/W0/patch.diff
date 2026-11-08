@@ -1,0 +1,1280 @@
+--- /dev/null	2026-11-07 14:59:32.635351164 +0530
++++ b/docs/plans/inc7-seams.md	2026-11-07 18:12:55.299464135 +0530
+@@ -0,0 +1,90 @@
++# Increment 7 Seams: BLE Discovery & Hotspot Handoff ("LS-BLE/1")
++
++Status: **Wave 0 Contract Specification**  
++Date: 2026-11-07  
++Authors: LibreShare Architecture Lead & Orchestrator  
++Related: `docs/design/03-ble-hotspot.md`, `docs/plans/inc7.md`, `docs/protocol/LSP-1.md`, ADR 0002
++
++---
++
++## 1. Architectural Overview & Boundaries
++
++Increment 7 introduces **LS-BLE/1**, providing local out-of-band peer discovery and automated ad-hoc Wi-Fi hotspot connection handoffs.
++
++### Key Architectural Invariants
++1. **Control-Plane Only**: Bluetooth Low Energy carries only discovery beacons, encrypted session negotiation, consent prompts, and network connection parameters. File data chunks are **NEVER** transmitted over BLE.
++2. **IP Transport Preservation**: All file transfers run over standard LSP/1 mTLS sessions using standard TCP sockets.
++3. **Strict Consent Prior to Disruption**: Starting or joining a Wi-Fi hotspot frequently interrupts a device's internet uplink. No hotspot may ever be started or joined without explicit user approval.
++4. **Fast LAN Bypass**: If both peers share a local Wi-Fi router (e.g. multicast or mDNS blocked by AP isolation), peers exchange local LAN IP addresses over the encrypted BLE channel. If direct LAN connectivity succeeds, the transfer proceeds over standard LAN without activating a hotspot.
++5. **No Long-Lived Identifiers in Beacons**: Beacons carry only a rotating 8-byte Ephemeral ID (EID) derived via HMAC-SHA256 from a shared `advKey` across 15-minute epochs ($\pm 1$ tolerance). Unpaired beacons emit random EIDs. Device names and certificate fingerprints are never broadcast.
++
++---
++
++## 2. Integration Seams with Core Subsystems
++
++```
++                                      +-------------------------+
++                                      |      LibreShareEngine   |
++                                      +------------+------------+
++                                                   |
++                     +-----------------------------+-----------------------------+
++                     |                             |                             |
++                     v                             v                             v
++           +--------------------+        +--------------------+        +--------------------+
++           |     BleBackend     |        |   HotspotBackend   |        | ConnectionManager  |
++           +---------+----------+        +---------+----------+        +---------+----------+
++                     |                             |                             |
++      +--------------+--------------+              |                             |
++      |                             |              |                             |
++      v                             v              v                             v
+++------------+               +------------+  +------------+             +-------------------+
++| Advertiser |               |  Scanner   |  | AP / Join  |             |  HotspotCandidate |
+++------------+               +------------+  +------------+             +-------------------+
++```
++
++### Seam 1: `PeerRegistry` & Discovery Engine
++- Discovered BLE devices enter `PeerRegistry` tagged with `DiscoverySource.ble`.
++- Scan results parse manufacturer data (`0xFFFF`, magic `LS`).
++- Known peers: Scanners evaluate trusted peer `advKey` secrets against EID across epochs $\{t-1, t, t+1\}$. Matching EID resolves directly to the trusted contact's identity.
++- Unknown peers: Emitted as anonymous "Nearby Device" with platform icon and RSSI.
++
++### Seam 2: `TrustStore` & Key Exchange
++- On "Trust this device" / pairing:
++  Peers call `PUT /api/v1/peers/ble-key` over mTLS carrying `{"advKey": "<b64url-32-bytes>"}`.
++- `TrustStore` persists `peerAdvKey` alongside pinned certificate fingerprints.
++- Revoking trust rotates the local `advKey` and broadcasts updates to remaining trusted contacts.
++
++### Seam 3: GATT Secure Channel State Machine
++- Service UUID: `fc7a9155-e024-4269-82a6-433dab94653e`
++- Characteristics: RX `...653f`, TX `...6540`.
++- Handshake:
++  1. `M1`: Central sends ephemeral X25519 pubkey + 16-byte nonce.
++  2. `M2`: Peripheral replies with ephemeral X25519 pubkey + 16-byte nonce.
++  3. Shared Secret & Transcript: $ss = \text{X25519}(priv, epk)$, $th = \text{SHA256}(\text{"LSBLE1"} \parallel M1 \parallel M2)$.
++  4. Keys: $k_{C2P}, k_{P2C} = \text{HKDF-SHA256}(ss, salt=th, info=\text{"LSBLE1-keys"}, 64)$.
++  5. `AUTH`: Encrypted exchange of persistent identity certificate DER and ECDSA signature over transcript.
++  6. SAS verification: Unpaired connections require identical 6-digit SAS confirmation before proceeding.
++
++### Seam 4: `ConnectionManager` & `HotspotCandidate`
++- `Candidate` gains asynchronous lifecycle hooks:
++  - `Duration get setupBudget`: (90s for joiner, 10s for host, 0s for LAN/direct).
++  - `Duration get connectBudget`: (3-5s for mTLS socket connect).
++  - `Future<void> setup()`: Triggers AP creation or network joining.
++  - `Future<void> teardown()`: Reverts network state to previous profiles.
++- `CandidateKind.hotspot`:
++  - Cost hint: 15 (preferred over internet relay tunnels [100], deferred after direct LAN [10]).
++  - If a hotspot dies mid-transfer, `ConnectionManager.fallbackToNext()` resumes transfer on alternative tiers without re-sending acknowledged chunks.
++
++---
++
++## 3. LSP/1.1 Additions
++
++### Additive Wire Fields
++1. **Capabilities Token**: `caps` array in announcement and info includes `"ble1"`.
++2. **Offer Identifier**: `SessionRequest` carries optional `offerId` (16 bytes base64).
++3. **Immediate Session Binding**: When `SessionRequest.offerId` matches an accepted `BleOffer` with verified peer certificate fingerprint, receiver immediately yields `200 IN_PROGRESS` without re-prompting user.
++
++### API Endpoints
++- `PUT /api/v1/peers/ble-key`:
++  Authenticated mTLS endpoint to exchange rotating beacon derivation keys.
++  Request body: `{"advKey": "<b64url 32 bytes>"}`.
+--- /dev/null	2026-11-07 14:59:32.635351164 +0530
++++ b/docs/protocol/ble/schemas/ble-auth.schema.json	2026-11-07 18:12:12.859549564 +0530
+@@ -0,0 +1,42 @@
++{
++  "$schema": "https://json-schema.org/draft/2020-12/schema",
++  "$id": "https://libreshare.org/schemas/ble-auth.schema.json",
++  "title": "BleAuth",
++  "description": "LS-BLE/1 Encrypted AUTH message establishing device identity and LAN candidates.",
++  "type": "object",
++  "required": ["type", "certDerB64", "sigB64", "alias", "platform", "lanCands"],
++  "properties": {
++    "type": {
++      "type": "string",
++      "const": "auth"
++    },
++    "certDerB64": {
++      "type": "string",
++      "description": "Base64-encoded DER representation of the persistent identity certificate."
++    },
++    "sigB64": {
++      "type": "string",
++      "description": "Base64-encoded signature over the handshake transcript."
++    },
++    "alias": {
++      "type": "string"
++    },
++    "platform": {
++      "type": "string"
++    },
++    "lanCands": {
++      "type": "array",
++      "items": {
++        "type": "object",
++        "required": ["ip", "port"],
++        "properties": {
++          "ip": { "type": "string" },
++          "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
++          "iface": { "type": "string" }
++        },
++        "additionalProperties": false
++      }
++    }
++  },
++  "additionalProperties": false
++}
+--- /dev/null	2026-11-07 14:59:32.635351164 +0530
++++ b/docs/protocol/ble/schemas/ble-decision.schema.json	2026-11-07 18:12:22.513530131 +0530
+@@ -0,0 +1,24 @@
++{
++  "$schema": "https://json-schema.org/draft/2020-12/schema",
++  "$id": "https://libreshare.org/schemas/ble-decision.schema.json",
++  "title": "BleDecision",
++  "description": "LS-BLE/1 Encrypted receiver decision (consent/rejection).",
++  "type": "object",
++  "required": ["type", "offerId", "accept"],
++  "properties": {
++    "type": {
++      "type": "string",
++      "const": "decision"
++    },
++    "offerId": {
++      "type": "string"
++    },
++    "accept": {
++      "type": "boolean"
++    },
++    "reason": {
++      "type": "string"
++    }
++  },
++  "additionalProperties": false
++}
+--- /dev/null	2026-11-07 14:59:32.635351164 +0530
++++ b/docs/protocol/ble/schemas/ble-hotspot.schema.json	2026-11-07 18:12:32.489510050 +0530
+@@ -0,0 +1,42 @@
++{
++  "$schema": "https://json-schema.org/draft/2020-12/schema",
++  "$id": "https://libreshare.org/schemas/ble-hotspot.schema.json",
++  "title": "BleHotspot",
++  "description": "LS-BLE/1 Encrypted hotspot credentials and connection endpoints.",
++  "type": "object",
++  "required": ["type", "offerId", "ssid", "psk", "hostIp", "port", "certFp", "validUntil"],
++  "properties": {
++    "type": {
++      "type": "string",
++      "const": "hotspot"
++    },
++    "offerId": {
++      "type": "string"
++    },
++    "ssid": {
++      "type": "string"
++    },
++    "psk": {
++      "type": "string"
++    },
++    "band": {
++      "type": "integer"
++    },
++    "hostIp": {
++      "type": "string"
++    },
++    "port": {
++      "type": "integer",
++      "minimum": 1,
++      "maximum": 65535
++    },
++    "certFp": {
++      "type": "string"
++    },
++    "validUntil": {
++      "type": "string",
++      "format": "date-time"
++    }
++  },
++  "additionalProperties": false
++}
+--- /dev/null	2026-11-07 14:59:32.635351164 +0530
++++ b/docs/protocol/ble/schemas/ble-joined.schema.json	2026-11-07 18:12:37.566499831 +0530
+@@ -0,0 +1,21 @@
++{
++  "$schema": "https://json-schema.org/draft/2020-12/schema",
++  "$id": "https://libreshare.org/schemas/ble-joined.schema.json",
++  "title": "BleJoined",
++  "description": "LS-BLE/1 Encrypted joined acknowledgment from joiner.",
++  "type": "object",
++  "required": ["type", "offerId", "clientIp"],
++  "properties": {
++    "type": {
++      "type": "string",
++      "const": "joined"
++    },
++    "offerId": {
++      "type": "string"
++    },
++    "clientIp": {
++      "type": "string"
++    }
++  },
++  "additionalProperties": false
++}
+--- /dev/null	2026-11-07 14:59:32.635351164 +0530
++++ b/docs/protocol/ble/schemas/ble-m1.schema.json	2026-11-07 18:12:03.114569180 +0530
+@@ -0,0 +1,31 @@
++{
++  "$schema": "https://json-schema.org/draft/2020-12/schema",
++  "$id": "https://libreshare.org/schemas/ble-m1.schema.json",
++  "title": "BleM1",
++  "description": "LS-BLE/1 M1 Hello message from Central to Peripheral.",
++  "type": "object",
++  "required": ["type", "v", "epk", "n"],
++  "properties": {
++    "type": {
++      "type": "string",
++      "const": "m1"
++    },
++    "v": {
++      "type": "integer",
++      "const": 1
++    },
++    "epk": {
++      "type": "string",
++      "description": "Base64-encoded ephemeral X25519 public key."
++    },
++    "n": {
++      "type": "string",
++      "description": "Base64-encoded 16-byte random nonce."
++    },
++    "eidHint": {
++      "type": "string",
++      "description": "Optional 2-byte prefix of the matched EID."
++    }
++  },
++  "additionalProperties": false
++}
+--- /dev/null	2026-11-07 14:59:32.635351164 +0530
++++ b/docs/protocol/ble/schemas/ble-m2.schema.json	2026-11-07 18:12:07.423560506 +0530
+@@ -0,0 +1,31 @@
++{
++  "$schema": "https://json-schema.org/draft/2020-12/schema",
++  "$id": "https://libreshare.org/schemas/ble-m2.schema.json",
++  "title": "BleM2",
++  "description": "LS-BLE/1 M2 Hello message from Peripheral to Central.",
++  "type": "object",
++  "required": ["type", "v", "epk", "n", "capEcho"],
++  "properties": {
++    "type": {
++      "type": "string",
++      "const": "m2"
++    },
++    "v": {
++      "type": "integer",
++      "const": 1
++    },
++    "epk": {
++      "type": "string",
++      "description": "Base64-encoded ephemeral X25519 public key."
++    },
++    "n": {
++      "type": "string",
++      "description": "Base64-encoded 16-byte random nonce."
++    },
++    "capEcho": {
++      "type": "integer",
++      "description": "Echoed peripheral capabilities bitmask."
++    }
++  },
++  "additionalProperties": false
++}
+--- /dev/null	2026-11-07 14:59:32.635351164 +0530
++++ b/docs/protocol/ble/schemas/ble-netplan.schema.json	2026-11-07 18:12:27.391520312 +0530
+@@ -0,0 +1,26 @@
++{
++  "$schema": "https://json-schema.org/draft/2020-12/schema",
++  "$id": "https://libreshare.org/schemas/ble-netplan.schema.json",
++  "title": "BleNetPlan",
++  "description": "LS-BLE/1 Encrypted network coordination plan.",
++  "type": "object",
++  "required": ["type", "offerId", "hostRole", "pathKind"],
++  "properties": {
++    "type": {
++      "type": "string",
++      "const": "net_plan"
++    },
++    "offerId": {
++      "type": "string"
++    },
++    "hostRole": {
++      "type": "string",
++      "enum": ["host", "join"]
++    },
++    "pathKind": {
++      "type": "string",
++      "enum": ["lan", "hotspot"]
++    }
++  },
++  "additionalProperties": false
++}
+--- /dev/null	2026-11-07 14:59:32.635351164 +0530
++++ b/docs/protocol/ble/schemas/ble-offer.schema.json	2026-11-07 18:12:18.199538815 +0530
+@@ -0,0 +1,46 @@
++{
++  "$schema": "https://json-schema.org/draft/2020-12/schema",
++  "$id": "https://libreshare.org/schemas/ble-offer.schema.json",
++  "title": "BleOffer",
++  "description": "LS-BLE/1 Encrypted file transfer offer over GATT.",
++  "type": "object",
++  "required": ["type", "offerId", "fileCount", "totalSize", "firstName", "lanCands", "hostPref"],
++  "properties": {
++    "type": {
++      "type": "string",
++      "const": "offer"
++    },
++    "offerId": {
++      "type": "string",
++      "description": "Base64-encoded 16-byte random offer identifier."
++    },
++    "fileCount": {
++      "type": "integer",
++      "minimum": 1
++    },
++    "totalSize": {
++      "type": "integer",
++      "minimum": 0
++    },
++    "firstName": {
++      "type": "string"
++    },
++    "lanCands": {
++      "type": "array",
++      "items": {
++        "type": "object",
++        "required": ["ip", "port"],
++        "properties": {
++          "ip": { "type": "string" },
++          "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
++          "iface": { "type": "string" }
++        },
++        "additionalProperties": false
++      }
++    },
++    "hostPref": {
++      "type": "integer"
++    }
++  },
++  "additionalProperties": false
++}
+--- /dev/null	2026-11-07 14:59:32.635351164 +0530
++++ b/packages/libreshare_core/lib/src/ble/beacon_types.dart	2026-11-07 18:13:53.066347855 +0530
+@@ -0,0 +1,231 @@
++import 'dart:typed_data';
++
++/// LibreShare BLE beacon constants per design 03 section 3.2.
++const int kBleCompanyIdSigTest = 0xFFFF;
++const int kBleMagicByte0 = 0x4C; // 'L'
++const int kBleMagicByte1 = 0x53; // 'S'
++const int kBleBeaconLength = 16;
++const int kBleBeaconVersion = 1;
++
++/// Flags field in the LibreShare BLE beacon (Offset 4, lower 4 bits).
++class BeaconFlags {
++  const BeaconFlags({
++    this.recv = false,
++    this.send = false,
++    this.open = false,
++    this.gatt = false,
++  });
++
++  final bool recv;
++  final bool send;
++  final bool open;
++  final bool gatt;
++
++  int toBits() {
++    var b = 0;
++    if (recv) b |= (1 << 0);
++    if (send) b |= (1 << 1);
++    if (open) b |= (1 << 2);
++    if (gatt) b |= (1 << 3);
++    return b & 0x0F;
++  }
++
++  factory BeaconFlags.fromBits(int bits) {
++    return BeaconFlags(
++      recv: (bits & (1 << 0)) != 0,
++      send: (bits & (1 << 1)) != 0,
++      open: (bits & (1 << 2)) != 0,
++      gatt: (bits & (1 << 3)) != 0,
++    );
++  }
++
++  @override
++  bool operator ==(Object other) =>
++      identical(this, other) ||
++      other is BeaconFlags &&
++          recv == other.recv &&
++          send == other.send &&
++          open == other.open &&
++          gatt == other.gatt;
++
++  @override
++  int get hashCode => Object.hash(recv, send, open, gatt);
++
++  @override
++  String toString() =>
++      'BeaconFlags(recv: $recv, send: $send, open: $open, gatt: $gatt)';
++}
++
++/// Platform code in the LibreShare BLE beacon capabilities.
++enum BlePlatform {
++  linux(0),
++  windows(1),
++  android(2),
++  macos(3),
++  ios(4),
++  other(5);
++
++  const BlePlatform(this.code);
++  final int code;
++
++  static BlePlatform fromCode(int code) {
++    for (final p in values) {
++      if (p.code == code) return p;
++    }
++    return other;
++  }
++}
++
++/// Capabilities field in the LibreShare BLE beacon (Offset 5).
++class BeaconCap {
++  const BeaconCap({
++    this.canHost = false,
++    this.canJoin = false,
++    this.hostKeepsUplink = false,
++    this.platform = BlePlatform.linux,
++  });
++
++  final bool canHost;
++  final bool canJoin;
++  final bool hostKeepsUplink;
++  final BlePlatform platform;
++
++  int toBits() {
++    var b = 0;
++    if (canHost) b |= (1 << 0);
++    if (canJoin) b |= (1 << 1);
++    if (hostKeepsUplink) b |= (1 << 2);
++    b |= (platform.code & 0x07) << 3;
++    return b & 0xFF;
++  }
++
++  factory BeaconCap.fromBits(int bits) {
++    return BeaconCap(
++      canHost: (bits & (1 << 0)) != 0,
++      canJoin: (bits & (1 << 1)) != 0,
++      hostKeepsUplink: (bits & (1 << 2)) != 0,
++      platform: BlePlatform.fromCode((bits >> 3) & 0x07),
++    );
++  }
++
++  @override
++  bool operator ==(Object other) =>
++      identical(this, other) ||
++      other is BeaconCap &&
++          canHost == other.canHost &&
++          canJoin == other.canJoin &&
++          hostKeepsUplink == other.hostKeepsUplink &&
++          platform == other.platform;
++
++  @override
++  int get hashCode => Object.hash(canHost, canJoin, hostKeepsUplink, platform);
++
++  @override
++  String toString() =>
++      'BeaconCap(canHost: $canHost, canJoin: $canJoin, hostKeepsUplink: $hostKeepsUplink, platform: $platform)';
++}
++
++/// Decoded LibreShare BLE beacon representation.
++class BleBeacon {
++  BleBeacon({
++    this.companyId = kBleCompanyIdSigTest,
++    this.version = kBleBeaconVersion,
++    required this.flags,
++    required this.cap,
++    required List<int> eid,
++    required this.seq,
++  }) : eid = Uint8List.fromList(eid) {
++    if (this.eid.length != 8) {
++      throw ArgumentError.value(
++        eid.length,
++        'eid',
++        'EID must be exactly 8 bytes',
++      );
++    }
++    if (seq < 0 || seq > 0xFFFF) {
++      throw ArgumentError.value(seq, 'seq', 'seq must be uint16 (0..65535)');
++    }
++  }
++
++  final int companyId;
++  final int version;
++  final BeaconFlags flags;
++  final BeaconCap cap;
++  final Uint8List eid;
++  final int seq;
++
++  /// Serializes the beacon to raw manufacturer bytes.
++  Uint8List toBytes() {
++    final buffer = ByteData(kBleBeaconLength);
++    // Company ID: 2 bytes little-endian
++    buffer.setUint16(0, companyId, Endian.little);
++    // Magic: "LS"
++    buffer.setUint8(2, kBleMagicByte0);
++    buffer.setUint8(3, kBleMagicByte1);
++    // Version and Flags
++    final vFlags = ((version & 0x0F) << 4) | (flags.toBits() & 0x0F);
++    buffer.setUint8(4, vFlags);
++    // Capabilities
++    buffer.setUint8(5, cap.toBits());
++    // EID: 8 bytes
++    final bytes = buffer.buffer.asUint8List();
++    bytes.setRange(6, 14, eid);
++    // Seq: 2 bytes little-endian
++    buffer.setUint16(14, seq, Endian.little);
++    return bytes;
++  }
++
++  /// Deserializes a beacon from manufacturer bytes. Returns null if invalid length or magic.
++  static BleBeacon? fromBytes(
++    List<int> bytes, {
++    int expectedCompanyId = kBleCompanyIdSigTest,
++  }) {
++    if (bytes.length < kBleBeaconLength) return null;
++    final data = ByteData.sublistView(Uint8List.fromList(bytes));
++    final cid = data.getUint16(0, Endian.little);
++    if (expectedCompanyId != 0 && cid != expectedCompanyId) return null;
++
++    final m0 = data.getUint8(2);
++    final m1 = data.getUint8(3);
++    if (m0 != kBleMagicByte0 || m1 != kBleMagicByte1) return null;
++
++    final vFlags = data.getUint8(4);
++    final ver = (vFlags >> 4) & 0x0F;
++    final flagsBits = vFlags & 0x0F;
++    final capBits = data.getUint8(5);
++    final eidBytes = Uint8List.sublistView(data.buffer.asUint8List(), 6, 14);
++    final seq = data.getUint16(14, Endian.little);
++
++    return BleBeacon(
++      companyId: cid,
++      version: ver,
++      flags: BeaconFlags.fromBits(flagsBits),
++      cap: BeaconCap.fromBits(capBits),
++      eid: eidBytes,
++      seq: seq,
++    );
++  }
++
++  @override
++  bool operator ==(Object other) =>
++      identical(this, other) ||
++      other is BleBeacon &&
++          companyId == other.companyId &&
++          version == other.version &&
++          flags == other.flags &&
++          cap == other.cap &&
++          _bytesEqual(eid, other.eid) &&
++          seq == other.seq;
++
++  @override
++  int get hashCode =>
++      Object.hash(companyId, version, flags, cap, Object.hashAll(eid), seq);
++
++  static bool _bytesEqual(List<int> a, List<int> b) {
++    if (a.length != b.length) return false;
++    for (var i = 0; i < a.length; i++) {
++      if (a[i] != b[i]) return false;
++    }
++    return true;
++  }
++}
+--- /dev/null	2026-11-07 14:59:32.635351164 +0530
++++ b/packages/libreshare_core/lib/src/ble/ble_backend.dart	2026-11-07 18:13:53.068347851 +0530
+@@ -0,0 +1,109 @@
++import 'dart:async';
++
++import 'beacon_types.dart';
++
++/// Fixed LibreShare GATT Service and Characteristic UUIDs (design 03 section 3.2).
++const String kBleServiceUuid = 'fc7a9155-e024-4269-82a6-433dab94653e';
++const String kBleCharRxUuid = 'fc7a9155-e024-4269-82a6-433dab94653f';
++const String kBleCharTxUuid = 'fc7a9155-e024-4269-82a6-433dab946540';
++
++/// Discovered BLE peripheral or beacon.
++class BleDevice {
++  const BleDevice({
++    required this.id,
++    this.name,
++    required this.rssi,
++    this.beacon,
++    required this.address,
++  });
++
++  /// Platform-specific identifier or MAC address.
++  final String id;
++
++  /// Advertised local name, if present.
++  final String? name;
++
++  /// Received Signal Strength Indication (dBm).
++  final int rssi;
++
++  /// Decoded LibreShare manufacturer beacon, if recognized.
++  final BleBeacon? beacon;
++
++  /// Hardware BLE address or privacy identifier.
++  final String address;
++
++  @override
++  String toString() =>
++      'BleDevice($id, rssi=$rssi, beacon=${beacon != null}, addr=$address)';
++}
++
++/// Filter criteria for BLE scanning.
++class BleScanFilter {
++  const BleScanFilter({
++    this.companyId = kBleCompanyIdSigTest,
++    this.serviceUuid = kBleServiceUuid,
++  });
++
++  final int? companyId;
++  final String? serviceUuid;
++}
++
++/// Bidirectional GATT stream session between Central and Peripheral.
++abstract class BleGattSession {
++  /// Transmits raw data frame over GATT characteristic (RX or TX depending on role).
++  Future<void> send(List<int> data);
++
++  /// Incoming stream of frames received from the remote peer.
++  Stream<List<int>> get received;
++
++  /// Closes the session and disconnects the underlying GATT channel.
++  Future<void> close();
++
++  /// Whether this session is terminated.
++  bool get isClosed;
++}
++
++/// Local GATT peripheral server listening for incoming central connections.
++abstract class BleGattServer {
++  /// Starts the local GATT service.
++  Future<void> start();
++
++  /// Stops the GATT server.
++  Future<void> stop();
++
++  /// Stream of established client sessions.
++  Stream<BleGattSession> get incomingSessions;
++
++  /// Whether the server is active.
++  bool get isRunning;
++}
++
++/// Low-level Bluetooth Low Energy abstraction.
++abstract class BleBackend {
++  /// Starts emitting a manufacturer-data beacon.
++  Future<void> startAdvertising(BleBeacon beacon, {bool connectable = false});
++
++  /// Stops advertising.
++  Future<void> stopAdvertising();
++
++  /// Whether beacon advertising is currently active.
++  bool get isAdvertising;
++
++  /// Starts scanning for nearby BLE advertisements.
++  Stream<BleDevice> scan({BleScanFilter? filter});
++
++  /// Stops an active scan.
++  Future<void> stopScan();
++
++  /// Whether scanning is currently active.
++  bool get isScanning;
++
++  /// Connects to a remote peripheral and establishes a GATT session.
++  Future<BleGattSession> connectGatt(
++    String deviceId, {
++    Duration timeout = const Duration(seconds: 10),
++  });
++
++  /// Local peripheral GATT server instance, or null if peripheral role is unsupported.
++  BleGattServer? get gattServer;
++}
+--- /dev/null	2026-11-07 14:59:32.635351164 +0530
++++ b/packages/libreshare_core/lib/src/ble/ble_contracts.dart	2026-11-07 18:11:57.236581012 +0530
+@@ -0,0 +1,4 @@
++export 'beacon_types.dart';
++export 'ble_backend.dart';
++export 'ble_messages.dart';
++export 'hotspot_backend.dart';
+--- /dev/null	2026-11-07 14:59:32.635351164 +0530
++++ b/packages/libreshare_core/lib/src/ble/ble_messages.dart	2026-11-07 18:13:53.076347835 +0530
+@@ -0,0 +1,351 @@
++import 'dart:convert';
++
++/// A candidate address reported over BLE for fast local LAN fallback.
++class LanCandidate {
++  const LanCandidate({required this.ip, required this.port, this.iface});
++
++  final String ip;
++  final int port;
++  final String? iface;
++
++  Map<String, Object?> toJson() => {
++    'ip': ip,
++    'port': port,
++    if (iface != null) 'iface': iface,
++  };
++
++  factory LanCandidate.fromJson(Map<String, Object?> json) => LanCandidate(
++    ip: json['ip']! as String,
++    port: json['port']! as int,
++    iface: json['iface'] as String?,
++  );
++
++  @override
++  bool operator ==(Object other) =>
++      identical(this, other) ||
++      other is LanCandidate &&
++          ip == other.ip &&
++          port == other.port &&
++          iface == other.iface;
++
++  @override
++  int get hashCode => Object.hash(ip, port, iface);
++}
++
++/// Sealed hierarchy of messages exchanged over GATT during LS-BLE/1 handoff.
++sealed class BleMessage {
++  const BleMessage();
++
++  String get type;
++
++  Map<String, Object?> toJson();
++
++  String encode() => jsonEncode(toJson());
++
++  static BleMessage fromJson(Map<String, Object?> json) {
++    final type = json['type'] as String?;
++    switch (type) {
++      case 'm1':
++        return BleM1.fromJson(json);
++      case 'm2':
++        return BleM2.fromJson(json);
++      case 'auth':
++        return BleAuth.fromJson(json);
++      case 'offer':
++        return BleOffer.fromJson(json);
++      case 'decision':
++        return BleDecision.fromJson(json);
++      case 'net_plan':
++        return BleNetPlan.fromJson(json);
++      case 'hotspot':
++        return BleHotspot.fromJson(json);
++      case 'joined':
++        return BleJoined.fromJson(json);
++      default:
++        throw FormatException('Unknown BleMessage type: $type');
++    }
++  }
++
++  static BleMessage decode(String text) =>
++      fromJson(jsonDecode(text) as Map<String, Object?>);
++}
++
++/// M1 Hello message from Central to Peripheral.
++final class BleM1 extends BleMessage {
++  const BleM1({this.v = 1, required this.epk, required this.n, this.eidHint});
++
++  final int v;
++  final String epk;
++  final String n;
++  final String? eidHint;
++
++  @override
++  String get type => 'm1';
++
++  @override
++  Map<String, Object?> toJson() => {
++    'type': type,
++    'v': v,
++    'epk': epk,
++    'n': n,
++    if (eidHint != null) 'eidHint': eidHint,
++  };
++
++  factory BleM1.fromJson(Map<String, Object?> json) => BleM1(
++    v: (json['v'] as int?) ?? 1,
++    epk: json['epk']! as String,
++    n: json['n']! as String,
++    eidHint: json['eidHint'] as String?,
++  );
++}
++
++/// M2 Hello message from Peripheral to Central.
++final class BleM2 extends BleMessage {
++  const BleM2({
++    this.v = 1,
++    required this.epk,
++    required this.n,
++    required this.capEcho,
++  });
++
++  final int v;
++  final String epk;
++  final String n;
++  final int capEcho;
++
++  @override
++  String get type => 'm2';
++
++  @override
++  Map<String, Object?> toJson() => {
++    'type': type,
++    'v': v,
++    'epk': epk,
++    'n': n,
++    'capEcho': capEcho,
++  };
++
++  factory BleM2.fromJson(Map<String, Object?> json) => BleM2(
++    v: (json['v'] as int?) ?? 1,
++    epk: json['epk']! as String,
++    n: json['n']! as String,
++    capEcho: json['capEcho']! as int,
++  );
++}
++
++/// Authenticated handshake identity and local candidates.
++final class BleAuth extends BleMessage {
++  const BleAuth({
++    required this.certDerB64,
++    required this.sigB64,
++    required this.alias,
++    required this.platform,
++    this.lanCands = const [],
++  });
++
++  final String certDerB64;
++  final String sigB64;
++  final String alias;
++  final String platform;
++  final List<LanCandidate> lanCands;
++
++  @override
++  String get type => 'auth';
++
++  @override
++  Map<String, Object?> toJson() => {
++    'type': type,
++    'certDerB64': certDerB64,
++    'sigB64': sigB64,
++    'alias': alias,
++    'platform': platform,
++    'lanCands': [for (final c in lanCands) c.toJson()],
++  };
++
++  factory BleAuth.fromJson(Map<String, Object?> json) => BleAuth(
++    certDerB64: json['certDerB64']! as String,
++    sigB64: json['sigB64']! as String,
++    alias: json['alias']! as String,
++    platform: json['platform']! as String,
++    lanCands: [
++      if (json['lanCands'] != null)
++        for (final c in json['lanCands']! as List)
++          LanCandidate.fromJson(c as Map<String, Object?>),
++    ],
++  );
++}
++
++/// File transfer offer initiated over GATT.
++final class BleOffer extends BleMessage {
++  const BleOffer({
++    required this.offerId,
++    required this.fileCount,
++    required this.totalSize,
++    required this.firstName,
++    this.lanCands = const [],
++    this.hostPref = 0,
++  });
++
++  final String offerId;
++  final int fileCount;
++  final int totalSize;
++  final String firstName;
++  final List<LanCandidate> lanCands;
++  final int hostPref;
++
++  @override
++  String get type => 'offer';
++
++  @override
++  Map<String, Object?> toJson() => {
++    'type': type,
++    'offerId': offerId,
++    'fileCount': fileCount,
++    'totalSize': totalSize,
++    'firstName': firstName,
++    'lanCands': [for (final c in lanCands) c.toJson()],
++    'hostPref': hostPref,
++  };
++
++  factory BleOffer.fromJson(Map<String, Object?> json) => BleOffer(
++    offerId: json['offerId']! as String,
++    fileCount: json['fileCount']! as int,
++    totalSize: json['totalSize']! as int,
++    firstName: json['firstName']! as String,
++    lanCands: [
++      if (json['lanCands'] != null)
++        for (final c in json['lanCands']! as List)
++          LanCandidate.fromJson(c as Map<String, Object?>),
++    ],
++    hostPref: (json['hostPref'] as int?) ?? 0,
++  );
++}
++
++/// Receiver consent decision (accept/reject) for an offer.
++final class BleDecision extends BleMessage {
++  const BleDecision({required this.offerId, required this.accept, this.reason});
++
++  final String offerId;
++  final bool accept;
++  final String? reason;
++
++  @override
++  String get type => 'decision';
++
++  @override
++  Map<String, Object?> toJson() => {
++    'type': type,
++    'offerId': offerId,
++    'accept': accept,
++    if (reason != null) 'reason': reason,
++  };
++
++  factory BleDecision.fromJson(Map<String, Object?> json) => BleDecision(
++    offerId: json['offerId']! as String,
++    accept: json['accept']! as bool,
++    reason: json['reason'] as String?,
++  );
++}
++
++/// Agreed network execution plan.
++final class BleNetPlan extends BleMessage {
++  const BleNetPlan({
++    required this.offerId,
++    required this.hostRole,
++    required this.pathKind,
++  });
++
++  final String offerId;
++  final String hostRole; // 'host' or 'join'
++  final String pathKind; // 'lan' or 'hotspot'
++
++  @override
++  String get type => 'net_plan';
++
++  @override
++  Map<String, Object?> toJson() => {
++    'type': type,
++    'offerId': offerId,
++    'hostRole': hostRole,
++    'pathKind': pathKind,
++  };
++
++  factory BleNetPlan.fromJson(Map<String, Object?> json) => BleNetPlan(
++    offerId: json['offerId']! as String,
++    hostRole: json['hostRole']! as String,
++    pathKind: json['pathKind']! as String,
++  );
++}
++
++/// Hotspot credentials and connection parameters.
++final class BleHotspot extends BleMessage {
++  const BleHotspot({
++    required this.offerId,
++    required this.ssid,
++    required this.psk,
++    this.band = 0,
++    required this.hostIp,
++    required this.port,
++    required this.certFp,
++    required this.validUntil,
++  });
++
++  final String offerId;
++  final String ssid;
++  final String psk;
++  final int band;
++  final String hostIp;
++  final int port;
++  final String certFp;
++  final String validUntil;
++
++  @override
++  String get type => 'hotspot';
++
++  @override
++  Map<String, Object?> toJson() => {
++    'type': type,
++    'offerId': offerId,
++    'ssid': ssid,
++    'psk': psk,
++    'band': band,
++    'hostIp': hostIp,
++    'port': port,
++    'certFp': certFp,
++    'validUntil': validUntil,
++  };
++
++  factory BleHotspot.fromJson(Map<String, Object?> json) => BleHotspot(
++    offerId: json['offerId']! as String,
++    ssid: json['ssid']! as String,
++    psk: json['psk']! as String,
++    band: (json['band'] as int?) ?? 0,
++    hostIp: json['hostIp']! as String,
++    port: json['port']! as int,
++    certFp: json['certFp']! as String,
++    validUntil: json['validUntil']! as String,
++  );
++}
++
++/// Confirmation from joiner that it has joined the hotspot.
++final class BleJoined extends BleMessage {
++  const BleJoined({required this.offerId, required this.clientIp});
++
++  final String offerId;
++  final String clientIp;
++
++  @override
++  String get type => 'joined';
++
++  @override
++  Map<String, Object?> toJson() => {
++    'type': type,
++    'offerId': offerId,
++    'clientIp': clientIp,
++  };
++
++  factory BleJoined.fromJson(Map<String, Object?> json) => BleJoined(
++    offerId: json['offerId']! as String,
++    clientIp: json['clientIp']! as String,
++  );
++}
+--- /dev/null	2026-11-07 14:59:32.635351164 +0530
++++ b/packages/libreshare_core/lib/src/ble/hotspot_backend.dart	2026-11-07 18:11:31.677632460 +0530
+@@ -0,0 +1,47 @@
++import 'dart:async';
++
++/// An active local hotspot reservation.
++abstract class HotspotReservation {
++  String get ssid;
++  String get psk;
++  String get hostIp;
++  int get port;
++
++  /// Stops the hotspot and releases system resources.
++  Future<void> stop();
++}
++
++/// The result of joining a Wi-Fi hotspot.
++abstract class HotspotJoinResult {
++  String get clientIp;
++  String get gatewayIp;
++
++  /// Disconnects from the hotspot and restores previous network profiles.
++  Future<void> disconnect();
++}
++
++/// Abstraction for platform-specific Wi-Fi hotspot creation and association.
++abstract class HotspotBackend {
++  /// Whether this device can host an ad-hoc or local hotspot.
++  bool get canHost;
++
++  /// Whether this device can join an external Wi-Fi hotspot programmatically.
++  bool get canJoin;
++
++  /// Whether hosting a hotspot preserves the current internet uplink (STA+AP / cellular).
++  bool get hostKeepsUplink;
++
++  /// Starts a local-only hotspot (e.g. Android LocalOnlyHotspot or Linux NetworkManager hotspot).
++  Future<HotspotReservation> startHotspot({
++    required String ssid,
++    required String psk,
++    int port = 53318,
++  });
++
++  /// Joins a specified Wi-Fi hotspot.
++  Future<HotspotJoinResult> joinHotspot({
++    required String ssid,
++    required String psk,
++    Duration timeout = const Duration(seconds: 90),
++  });
++}
+--- a/packages/libreshare_core/lib/src/connection/candidate.dart	2026-11-06 17:15:38.282137606 +0530
++++ b/packages/libreshare_core/lib/src/connection/candidate.dart	2026-11-07 18:14:36.161261108 +0530
+@@ -23,7 +23,10 @@
+   loopback('loopback', defaultCostHint: 5),
+ 
+   /// Encrypted relay tunnel (reserved for Increment 5).
+-  tunnel('tunnel', defaultCostHint: 100);
++  tunnel('tunnel', defaultCostHint: 100),
++
++  /// Local Wi-Fi hotspot ad-hoc network (Increment 7).
++  hotspot('hotspot', defaultCostHint: 15);
+ 
+   const CandidateKind(this.wire, {required this.defaultCostHint});
+ 
+@@ -242,4 +245,112 @@
+   @override
+   String toString() =>
+       'Candidate($id, kind=$kind, host=$host:$port, cost=$costHint, rtt=${rtt?.inMilliseconds}ms)';
++
++  /// Budget allowed for candidate physical/medium setup prior to socket connection.
++  Duration get setupBudget => const Duration(seconds: 0);
++
++  /// Budget allowed for TCP and TLS handshake.
++  Duration get connectBudget => const Duration(seconds: 3);
++
++  /// Asynchronous hook to prepare candidate medium (e.g. Wi-Fi join or host AP).
++  Future<void> setup() async {}
++
++  /// Asynchronous hook to release candidate medium and restore network state.
++  Future<void> teardown() async {}
++}
++
++/// Role in a Wi-Fi hotspot handoff (host or join).
++enum HotspotRole {
++  host('host'),
++  join('join');
++
++  const HotspotRole(this.wire);
++  final String wire;
++
++  static HotspotRole fromWire(String wire) {
++    for (final r in values) {
++      if (r.wire == wire) return r;
++    }
++    throw ArgumentError.value(wire, 'wire', 'Unknown hotspot role');
++  }
++}
++
++/// Candidate network path traversing a temporary Wi-Fi hotspot (Increment 7).
++class HotspotCandidate extends Candidate {
++  HotspotCandidate({
++    required super.id,
++    required super.host,
++    required super.port,
++    required super.peerFingerprint,
++    required this.role,
++    required this.ssid,
++    required this.psk,
++    required this.validUntil,
++    required this.offerId,
++    super.costHint = 15,
++    super.lastSuccess,
++    super.rtt,
++    this.onSetup,
++    this.onTeardown,
++  }) : super(kind: CandidateKind.hotspot);
++
++  final HotspotRole role;
++  final String ssid;
++  final String psk;
++  final DateTime validUntil;
++  final String offerId;
++  final Future<void> Function()? onSetup;
++  final Future<void> Function()? onTeardown;
++
++  @override
++  Duration get setupBudget => role == HotspotRole.join
++      ? const Duration(seconds: 90)
++      : const Duration(seconds: 10);
++
++  @override
++  Duration get connectBudget => const Duration(seconds: 5);
++
++  @override
++  Future<void> setup() async => onSetup?.call();
++
++  @override
++  Future<void> teardown() async => onTeardown?.call();
++
++  @override
++  Map<String, Object?> toJson() => {
++    ...super.toJson(),
++    'role': role.wire,
++    'ssid': ssid,
++    'offerId': offerId,
++    'validUntil': validUntil.toUtc().toIso8601String(),
++  };
++
++  factory HotspotCandidate.fromJson(
++    Map<String, Object?> json, {
++    required String psk,
++    Future<void> Function()? onSetup,
++    Future<void> Function()? onTeardown,
++  }) {
++    return HotspotCandidate(
++      id: json['id']! as String,
++      host: json['host']! as String,
++      port: json['port']! as int,
++      peerFingerprint: json['peerFingerprint']! as String,
++      role: HotspotRole.fromWire(json['role']! as String),
++      ssid: json['ssid']! as String,
++      psk: psk,
++      validUntil: DateTime.parse(json['validUntil']! as String),
++      offerId: json['offerId']! as String,
++      costHint:
++          (json['costHint'] as int?) ?? CandidateKind.hotspot.defaultCostHint,
++      lastSuccess: json['lastSuccess'] != null
++          ? DateTime.parse(json['lastSuccess']! as String)
++          : null,
++      rtt: json['rttMs'] != null
++          ? Duration(milliseconds: json['rttMs']! as int)
++          : null,
++      onSetup: onSetup,
++      onTeardown: onTeardown,
++    );
++  }
+ }
+diff --git a/apps/libreshare_app/lib/widgets/channel_badge.dart b/apps/libreshare_app/lib/widgets/channel_badge.dart
+index 1ae1cc7..6993b2a 100644
+--- a/apps/libreshare_app/lib/widgets/channel_badge.dart
++++ b/apps/libreshare_app/lib/widgets/channel_badge.dart
+@@ -25,6 +25,11 @@ class ChannelBadge extends StatelessWidget {
+       CandidateKind.loopback => (Icons.loop, 'Loopback', colorScheme.tertiary),
+       CandidateKind.manual => (Icons.tune, 'Manual', colorScheme.outline),
+       CandidateKind.tunnel => (Icons.cloud, 'Tunnel', colorScheme.error),
++      CandidateKind.hotspot => (
++        Icons.wifi_tethering,
++        'Hotspot',
++        colorScheme.secondary,
++      ),
+     };
+ 
+     if (isFallingBack) {

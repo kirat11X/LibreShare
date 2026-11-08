@@ -1,45 +1,15 @@
-# Module H3 Report: secret_redactor
+# Card H3 Report: secret_redactor (REBASED)
 
-Date: 2026-11-06
-Author: Antigravity (Lead)
-Target: `packages/libreshare_core/lib/src/security/secret_redactor.dart`
+**Card:** H3 (secret_redactor.dart — Regex sanitization of URLs, paths, fragments, logging hook)  
+**Status:** REBASED (Clean `patch -p1 --dry-run`, 11/11 tests pass, analyze rc=0, format rc=0)  
 
----
-
-## 1. Test-First Red-Then-Green Evidence
-
-### Step 1: Red Run (Pre-Implementation)
-- **Command:** `cd .toolchain/scratch/inc5-h3-secret-redactor/clone/packages/libreshare_core && dart test test/unit/secret_redactor_test.dart`
-- **Result:** Compilation failure (`Error when reading 'lib/src/security/secret_redactor.dart': No such file or directory`)
-- **Exit Code:** 1
-
-### Step 2: Green Run (Post-Implementation)
-- **Command:** `cd .toolchain/scratch/inc5-h3-secret-redactor/clone/packages/libreshare_core && dart test test/unit/secret_redactor_test.dart`
-- **Result:** All 11 passed (`+11`)
-- **Exit Code:** 0
-
-### Step 3: 3x Flake Run
-- **Command:** `cd .toolchain/scratch/inc5-h3-secret-redactor/clone/packages/libreshare_core && dart test test/unit/secret_redactor_test.dart && dart test test/unit/secret_redactor_test.dart && dart test test/unit/secret_redactor_test.dart`
-- **Result:** 3 consecutive runs of 11/11 passed with zero flakes
-- **Exit Code:** 0
-
-### Step 4: Format & Analyze
-- **Command:** `dart format --output=none --set-exit-if-changed lib/src/security/secret_redactor.dart test/unit/secret_redactor_test.dart`
-- **Result:** 0 changed
-- **Exit Code:** 0
-- **Command:** `dart analyze --fatal-infos`
-- **Result:** No issues found!
-- **Exit Code:** 0
-
----
-
-## 2. Mutation Table (inc5-seams.md Section 5)
-
-| Mutation | Description | Failing Test Caught | RC |
-| :--- | :--- | :--- | :--- |
-| M1 | Leave `/t/` unredacted | `/t/<token> segment in path is redacted` | 1 |
-| M2 | Leave URL fragment unredacted | `URL fragments are redacted` | 1 |
-| M3 | Leave `claim=` unredacted | `parameters k, t, pin, s, claim values are redacted` | 1 |
-| M4 | Redact hex digests (false positive) | `SHA-256 hex digests and filenames are NOT redacted` | 1 |
-
-All 4 mutations were caught by the test suite with non-zero exit codes.
+## Evidence & Verification
+- `patch -p1 --dry-run < docs/plans/inc5-proposals/h3-secret-redactor/patch.diff`: clean (`rc=0`)
+- `dart test packages/libreshare_core/test/unit/secret_redactor_test.dart`:
+  Output: `00:00 +11: All tests passed!` (`rc=0`)
+- `dart analyze --fatal-infos packages/libreshare_core/lib/src/security/secret_redactor.dart`:
+  Output: `No issues found!` (`rc=0`)
+- `dart format --output=none --set-exit-if-changed ...`:
+  Output: `Formatted 2 files (0 changed)` (`rc=0`)
+- 5/5 mutations killed in `verifier-report.md`.
+- Redacts `/t/<token>`, `#[fragment]`, `k=`, `claim`, `X-LS-Claim`; linear regex performance; zero false positives on SHA-256 digests.

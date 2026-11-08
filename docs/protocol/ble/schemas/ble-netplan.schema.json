@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://libreshare.org/schemas/ble-netplan.schema.json",
+  "title": "BleNetPlan",
+  "description": "LS-BLE/1 Encrypted network coordination plan.",
+  "type": "object",
+  "required": ["type", "offerId", "hostRole", "pathKind"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "net_plan"
+    },
+    "offerId": {
+      "type": "string"
+    },
+    "hostRole": {
+      "type": "string",
+      "enum": ["host", "join"]
+    },
+    "pathKind": {
+      "type": "string",
+      "enum": ["lan", "hotspot"]
+    }
+  },
+  "additionalProperties": false
+}

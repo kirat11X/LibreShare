@@ -1,0 +1,70 @@
+--- a/tools/docker/e2e.sh
++++ b/tools/docker/e2e.sh
+@@ -563,10 +563,14 @@
+ dd if=/dev/urandom of=/tmp/e2e-m.bin bs=1M count=10 status=none
+ sha_m=$(sha256sum /tmp/e2e-m.bin | awk '{print $1}')
+ 
+-# Cut both local network interfaces (LAN on eth0, WiFi on eth1)
+-if [[ -x /usr/local/bin/cut_wifi.sh ]]; then
+-  /usr/local/bin/cut_wifi.sh eth0 cut
+-  /usr/local/bin/cut_wifi.sh eth1 cut
++# Cut both local network interfaces (LAN and WiFi resolved dynamically via ip route)
++LAN_IF=$(ip -o route get "$BOB_IP" 2>/dev/null | awk '{print $3}' || true)
++WIFI_IF=$(ip -o route get "$WIFI_BOB_IP" 2>/dev/null | awk '{print $3}' || true)
++if [[ -n "$LAN_IF" && -x /usr/local/bin/cut_wifi.sh ]]; then
++  /usr/local/bin/cut_wifi.sh "$LAN_IF" cut
++fi
++if [[ -n "$WIFI_IF" && -x /usr/local/bin/cut_wifi.sh ]]; then
++  /usr/local/bin/cut_wifi.sh "$WIFI_IF" cut
+ fi
+ 
+ # Local transfer attempt over cut networks must fail
+@@ -594,9 +598,11 @@
+ rm -f /tmp/link.log
+ 
+ # Restore interfaces for subsequent steps
+-if [[ -x /usr/local/bin/cut_wifi.sh ]]; then
+-  /usr/local/bin/cut_wifi.sh eth0 restore
+-  /usr/local/bin/cut_wifi.sh eth1 restore
++if [[ -n "$LAN_IF" && -x /usr/local/bin/cut_wifi.sh ]]; then
++  /usr/local/bin/cut_wifi.sh "$LAN_IF" restore
++fi
++if [[ -n "$WIFI_IF" && -x /usr/local/bin/cut_wifi.sh ]]; then
++  /usr/local/bin/cut_wifi.sh "$WIFI_IF" restore
+ fi
+ wait_for "bob reachable after restoring interfaces" 10 peer_up "$BOB_IP" || true
+ rm -f /tmp/e2e-m.bin
+@@ -677,6 +683,7 @@
+ 
+ FAULT_DEV="lo"
+ fault_clean() { tc qdisc del dev "$FAULT_DEV" root 2>/dev/null || true; }
++trap 'fault_clean; kill "$o_rx_pid" 2>/dev/null || true' EXIT INT TERM
+ fault_clean
+ 
+ passed_seed_runs=0
+@@ -711,6 +718,7 @@
+ done
+ 
+ fault_clean
++trap - EXIT INT TERM
+ kill "$o_rx_pid" 2>/dev/null || true
+ rm -f /tmp/e2e-o.bin "$RX_DIR_O"/e2e-o.bin*
+ 
+@@ -719,12 +727,17 @@
+ # ==================================================================================================
+ step "p) bench on the bridge"
+ if [[ -d /bench ]]; then
++  # Preflight check on bob before starting high-speed benchmark
++  "$LS" info "$BOB_IP:$PORT" >/dev/null 2>&1 || sleep 1
+   dd if=/dev/urandom of=/bench/test-100m.bin bs=1M count=50 status=none
+   t0=${EPOCHREALTIME/./}
+   rc=0; out=$("$LS" send --to "$BOB_IP:$PORT" /bench/test-100m.bin 2>&1) || rc=$?
+   t1=${EPOCHREALTIME/./}
+   dt_s=$(awk -v t0="$t0" -v t1="$t1" 'BEGIN { printf "%.2f", (t1 - t0) / 1000000 }')
+   rate_mib=$(awk -v dt="$dt_s" 'BEGIN { if (dt > 0) printf "%.1f", 50 / dt; else print "0" }')
++  if [[ "$rc" -ne 0 ]]; then
++    note "Bench send failed: exit=$rc first_line=$(head -n 1 <<<"$out")"
++  fi
+   check "bench on bridge finished ($rate_mib MiB/s)" test "$rc" -eq 0
+   METRICS+=("bridge_rate_mib=$rate_mib")
+   rm -f /bench/test-100m.bin

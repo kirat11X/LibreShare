@@ -1,0 +1,638 @@
+--- /dev/null	2026-11-07 14:59:32.635351164 +0530
++++ b/packages/libreshare_core/lib/src/tunnel/fake_tunnel_provider.dart	2026-11-07 20:51:16.141391643 +0530
+@@ -0,0 +1,297 @@
++import 'dart:async';
++import 'dart:io';
++import 'dart:typed_data';
++
++import 'tunnel_provider.dart';
++
++final class CapturedFrame {
++  final String method;
++  final Uri uri;
++  final Map<String, String> headers;
++  final Uint8List body;
++  final int statusCode;
++  final DateTime timestamp;
++
++  CapturedFrame({
++    required this.method,
++    required this.uri,
++    required this.headers,
++    required this.body,
++    required this.statusCode,
++    required this.timestamp,
++  });
++}
++
++class FakeTunnelProvider implements TunnelProvider {
++  final int maxInFlight;
++  final int maxRequestBodyBytes;
++  final Duration simulatedLatency;
++  final double simulatedLossRate;
++
++  // Hostile mode knobs
++  final int hostileBitFlipChunkIndex;
++  final int hostileDropChunkIndex;
++  final bool hostileSwapChunks;
++
++  final List<CapturedFrame> captureBuffer = [];
++
++  FakeTunnelProvider({
++    this.maxInFlight = 200,
++    this.maxRequestBodyBytes = 100 * 1024 * 1024, // 100 MiB
++    this.simulatedLatency = Duration.zero,
++    this.simulatedLossRate = 0.0,
++    this.hostileBitFlipChunkIndex = -1,
++    this.hostileDropChunkIndex = -1,
++    this.hostileSwapChunks = false,
++  });
++
++  @override
++  String get id => 'fake';
++
++  @override
++  Future<bool> isAvailable() async => true;
++
++  @override
++  Future<TunnelHandle> open(
++    int localPort, {
++    Duration ready = const Duration(seconds: 45),
++  }) async {
++    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
++    final handle = _FakeTunnelHandle(
++      provider: this,
++      server: server,
++      originPort: localPort,
++    );
++    await handle.init();
++    return handle;
++  }
++
++  bool containsPlaintext(List<int> marker) {
++    if (marker.isEmpty) return false;
++    for (final frame in captureBuffer) {
++      if (_containsSublist(frame.body, marker)) {
++        return true;
++      }
++    }
++    return false;
++  }
++
++  static bool _containsSublist(List<int> source, List<int> pattern) {
++    if (pattern.length > source.length) return false;
++    for (var i = 0; i <= source.length - pattern.length; i++) {
++      var match = true;
++      for (var j = 0; j < pattern.length; j++) {
++        if (source[i + j] != pattern[j]) {
++          match = false;
++          break;
++        }
++      }
++      if (match) return true;
++    }
++    return false;
++  }
++}
++
++class _FakeTunnelHandle implements TunnelHandle {
++  final FakeTunnelProvider provider;
++  final HttpServer server;
++  final int originPort;
++  final HttpClient _client = HttpClient();
++  final StreamController<TunnelEvent> _eventController =
++      StreamController<TunnelEvent>.broadcast();
++
++  int _inFlightCount = 0;
++  bool _closed = false;
++
++  _FakeTunnelHandle({
++    required this.provider,
++    required this.server,
++    required this.originPort,
++  });
++
++  @override
++  Uri get publicBase => Uri.parse('http://127.0.0.1:${server.port}');
++
++  @override
++  Stream<TunnelEvent> get events async* {
++    if (!_closed) {
++      yield const TunnelUpEvent();
++    }
++    yield* _eventController.stream;
++  }
++
++  Future<void> init() async {
++    server.listen(
++      _handleIncomingRequest,
++      onError: (e) {
++        if (!_closed) {
++          _eventController.add(TunnelLostEvent(e.toString()));
++        }
++      },
++    );
++  }
++
++  Future<void> _handleIncomingRequest(HttpRequest clientReq) async {
++    if (_closed) {
++      clientReq.response.statusCode = HttpStatus.serviceUnavailable;
++      await clientReq.response.close();
++      return;
++    }
++
++    if (_inFlightCount >= provider.maxInFlight) {
++      clientReq.response
++        ..statusCode = HttpStatus.tooManyRequests
++        ..headers.set('Retry-After', '5')
++        ..write('Too Many Requests');
++      await clientReq.response.close();
++      return;
++    }
++
++    _inFlightCount++;
++
++    try {
++      if (provider.simulatedLatency > Duration.zero) {
++        await Future<void>.delayed(provider.simulatedLatency);
++      }
++
++      // Check hostile chunk drop
++      if (provider.hostileDropChunkIndex >= 0) {
++        final path = clientReq.uri.path;
++        if (path.endsWith('/c/${provider.hostileDropChunkIndex}')) {
++          clientReq.response.statusCode = HttpStatus.gatewayTimeout;
++          await clientReq.response.close();
++          return;
++        }
++      }
++
++      // Read client request body up to maxRequestBodyBytes
++      final bodyBytes = <int>[];
++      var exceeded = false;
++      await for (final chunk in clientReq) {
++        bodyBytes.addAll(chunk);
++        if (bodyBytes.length > provider.maxRequestBodyBytes) {
++          exceeded = true;
++          break;
++        }
++      }
++
++      if (exceeded) {
++        clientReq.response
++          ..statusCode = HttpStatus.requestEntityTooLarge
++          ..write('Payload Too Large');
++        await clientReq.response.close();
++        return;
++      }
++
++      final reqHeaders = <String, String>{};
++      clientReq.headers.forEach((name, values) {
++        reqHeaders[name] = values.join(', ');
++      });
++
++      provider.captureBuffer.add(
++        CapturedFrame(
++          method: clientReq.method,
++          uri: clientReq.uri,
++          headers: reqHeaders,
++          body: Uint8List.fromList(bodyBytes),
++          statusCode: 0,
++          timestamp: DateTime.now(),
++        ),
++      );
++
++      // Check hostile chunk swap (swap /c/0 and /c/1)
++      var targetUri = clientReq.uri;
++      if (provider.hostileSwapChunks) {
++        final path = targetUri.path;
++        if (path.endsWith('/c/0')) {
++          targetUri = targetUri.replace(path: path.replaceAll('/c/0', '/c/1'));
++        } else if (path.endsWith('/c/1')) {
++          targetUri = targetUri.replace(path: path.replaceAll('/c/1', '/c/0'));
++        }
++      }
++
++      // Forward to origin
++      final originUri = Uri.parse(
++        'http://127.0.0.1:$originPort${targetUri.path}${targetUri.hasQuery ? '?${targetUri.query}' : ''}',
++      );
++      final originReq = await _client.openUrl(clientReq.method, originUri);
++
++      // Copy headers
++      clientReq.headers.forEach((name, values) {
++        if (name.toLowerCase() != 'host') {
++          for (final val in values) {
++            originReq.headers.add(name, val);
++          }
++        }
++      });
++      originReq.headers.set('Host', '127.0.0.1:$originPort');
++      originReq.headers.set(
++        'Cf-Connecting-Ip',
++        clientReq.connectionInfo?.remoteAddress.address ?? '127.0.0.1',
++      );
++
++      if (bodyBytes.isNotEmpty) {
++        originReq.add(bodyBytes);
++      }
++
++      final originResp = await originReq.close();
++      var respBody = await originResp.fold<List<int>>(
++        [],
++        (p, e) => p..addAll(e),
++      );
++
++      // Hostile bit-flip modification
++      if (provider.hostileBitFlipChunkIndex >= 0 &&
++          clientReq.uri.path.endsWith(
++            '/c/${provider.hostileBitFlipChunkIndex}',
++          )) {
++        if (respBody.isNotEmpty) {
++          final tampered = List<int>.from(respBody);
++          // Flip lowest bit of first byte
++          tampered[tampered.length ~/ 2] ^= 0x01;
++          respBody = tampered;
++        }
++      }
++
++      // Record captured response
++      final respHeaders = <String, String>{};
++      originResp.headers.forEach((name, values) {
++        respHeaders[name] = values.join(', ');
++      });
++
++      provider.captureBuffer.add(
++        CapturedFrame(
++          method: clientReq.method,
++          uri: clientReq.uri,
++          headers: respHeaders,
++          body: Uint8List.fromList(respBody),
++          statusCode: originResp.statusCode,
++          timestamp: DateTime.now(),
++        ),
++      );
++
++      // Return to client
++      clientReq.response.statusCode = originResp.statusCode;
++      originResp.headers.forEach((name, values) {
++        for (final val in values) {
++          clientReq.response.headers.add(name, val);
++        }
++      });
++
++      clientReq.response.add(respBody);
++      await clientReq.response.close();
++    } finally {
++      _inFlightCount--;
++    }
++  }
++
++  @override
++  Future<void> close() async {
++    if (_closed) return;
++    _closed = true;
++    _eventController.add(const TunnelLostEvent('closed'));
++    await _eventController.close();
++    _client.close(force: true);
++    await server.close(force: true);
++  }
++}
+--- /dev/null	2026-11-07 14:59:32.635351164 +0530
++++ b/packages/libreshare_core/lib/src/server/tunnel_origin_server.dart	2026-11-07 20:51:16.149391623 +0530
+@@ -0,0 +1,335 @@
++import 'dart:async';
++import 'dart:convert';
++import 'dart:io';
++import 'dart:typed_data';
++
++import '../security/tunnel_crypto.dart';
++
++class TunnelOriginShare {
++  final String token;
++  final TunnelKeys keys;
++  final Uint8List sealedManifest;
++  final int totalBytes;
++  final int maxReceivers; // 1 default, 0 = anyone, N = up to N
++  final DateTime? expiresAt;
++  final Future<Uint8List> Function(int fileIndex, int chunkIndex) getChunk;
++  final void Function(String claim)? onCompleted;
++  final void Function(String reason)? onRevoked;
++
++  bool isRevoked = false;
++  bool isCompleted = false;
++  final Set<String> boundClaims = {};
++  int bytesServed = 0;
++  int concurrentRequests = 0;
++
++  TunnelOriginShare({
++    required this.token,
++    required this.keys,
++    required this.sealedManifest,
++    required this.totalBytes,
++    this.maxReceivers = 1,
++    this.expiresAt,
++    required this.getChunk,
++    this.onCompleted,
++    this.onRevoked,
++  });
++
++  int get maxAllowedBytes {
++    final factor = maxReceivers == 0 ? 10 : maxReceivers;
++    return 2 * totalBytes * factor;
++  }
++}
++
++class TunnelOriginServer {
++  final int maxConcurrentPerToken;
++  final int maxConcurrentTotal;
++  final Duration writeTimeout;
++
++  HttpServer? _server;
++  final Map<String, TunnelOriginShare> _shares = {};
++  int _totalInFlight = 0;
++
++  TunnelOriginServer({
++    this.maxConcurrentPerToken = 8,
++    this.maxConcurrentTotal = 32,
++    this.writeTimeout = const Duration(seconds: 60),
++  });
++
++  int get port => _server?.port ?? 0;
++
++  Future<void> start({int port = 0}) async {
++    _server = await HttpServer.bind(InternetAddress.loopbackIPv4, port);
++    _server!.listen(_handleRequest);
++  }
++
++  void registerShare(TunnelOriginShare share) {
++    _shares[share.token] = share;
++  }
++
++  void revokeShare(String token) {
++    final share = _shares[token];
++    if (share != null) {
++      share.isRevoked = true;
++      share.onRevoked?.call('manual revocation');
++    }
++  }
++
++  Future<void> stop() async {
++    for (final share in _shares.values) {
++      share.isRevoked = true;
++    }
++    _shares.clear();
++    await _server?.close(force: true);
++    _server = null;
++  }
++
++  Future<void> _handleRequest(HttpRequest req) async {
++    // Apply required security headers on every response
++    req.response.headers.set('Cache-Control', 'no-store');
++    req.response.headers.set('Referrer-Policy', 'no-referrer');
++    req.response.headers.set('X-Content-Type-Options', 'nosniff');
++
++    final segments = req.uri.pathSegments;
++
++    // Route: /t/{token}
++    if (segments.length == 2 && segments[0] == 't') {
++      // Static HTML landing page (for browser/bot clicks, no claim required, no side effect)
++      req.response
++        ..statusCode = HttpStatus.ok
++        ..headers.contentType = ContentType('text', 'html', charset: 'utf-8')
++        ..write(
++          '<!DOCTYPE html><html><head><title>LibreShare</title>'
++          '<meta name=referrer content=no-referrer></head>'
++          '<body><p>Open this link in LibreShare to download the shared files.</p></body></html>',
++        );
++      await req.response.close();
++      return;
++    }
++
++    // Must be /t/{token}/...
++    if (segments.length < 3 || segments[0] != 't') {
++      req.response
++        ..statusCode = HttpStatus.notFound
++        ..write('Not Found');
++      await req.response.close();
++      return;
++    }
++
++    final token = segments[1];
++    final share = _shares[token];
++
++    if (share == null) {
++      req.response
++        ..statusCode = HttpStatus.notFound
++        ..write('Share Not Found');
++      await req.response.close();
++      return;
++    }
++
++    // Check expiration and revocation
++    final now = DateTime.now();
++    if (share.isRevoked ||
++        (share.expiresAt != null && share.expiresAt!.isBefore(now))) {
++      req.response
++        ..statusCode = HttpStatus.gone
++        ..write('Share Expired or Revoked');
++      await req.response.close();
++      return;
++    }
++
++    // If one-time completed, subsequent requests return 401 Unauthorized
++    if (share.isCompleted) {
++      req.response
++        ..statusCode = HttpStatus.unauthorized
++        ..write('Share Already Completed');
++      await req.response.close();
++      return;
++    }
++
++    // Concurrency limit checks
++    if (_totalInFlight >= maxConcurrentTotal) {
++      req.response
++        ..statusCode = HttpStatus.tooManyRequests
++        ..headers.set('Retry-After', '5')
++        ..write('Server Concurrency Limit Reached');
++      await req.response.close();
++      return;
++    }
++
++    if (share.concurrentRequests >= maxConcurrentPerToken) {
++      req.response
++        ..statusCode = HttpStatus.tooManyRequests
++        ..headers.set('Retry-After', '5')
++        ..write('Token Concurrency Limit Reached');
++      await req.response.close();
++      return;
++    }
++
++    // Validate X-LS-Claim header
++    final claim = req.headers.value('X-LS-Claim');
++    if (claim == null || claim.isEmpty) {
++      req.response
++        ..statusCode = HttpStatus.unauthorized
++        ..write('Missing X-LS-Claim Header');
++      await req.response.close();
++      return;
++    }
++
++    // Claim binding logic
++    if (share.maxReceivers == 1) {
++      if (share.boundClaims.isEmpty) {
++        share.boundClaims.add(claim);
++      } else if (!share.boundClaims.contains(claim)) {
++        req.response
++          ..statusCode = HttpStatus.conflict
++          ..write('Share Bound to Another Claimant');
++        await req.response.close();
++        return;
++      }
++    } else if (share.maxReceivers > 1) {
++      if (share.boundClaims.length < share.maxReceivers) {
++        share.boundClaims.add(claim);
++      } else if (!share.boundClaims.contains(claim)) {
++        req.response
++          ..statusCode = HttpStatus.conflict
++          ..write('Max Claimants Reached');
++        await req.response.close();
++        return;
++      }
++    } else {
++      // maxReceivers == 0 (anyone)
++      share.boundClaims.add(claim);
++    }
++
++    _totalInFlight++;
++    share.concurrentRequests++;
++
++    try {
++      final action = segments[2];
++
++      if (action == 'manifest' && req.method == 'GET') {
++        req.response
++          ..statusCode = HttpStatus.ok
++          ..headers.contentType = ContentType('application', 'octet-stream')
++          ..add(share.sealedManifest);
++        await req.response.close();
++        return;
++      }
++
++      if (action == 'f' &&
++          req.method == 'GET' &&
++          segments.length == 6 &&
++          segments[4] == 'c') {
++        final fid = int.tryParse(segments[3]);
++        final cid = int.tryParse(segments[5]);
++
++        if (fid == null || cid == null) {
++          req.response
++            ..statusCode = HttpStatus.badRequest
++            ..write('Invalid file or chunk index');
++          await req.response.close();
++          return;
++        }
++
++        // Byte budget check
++        if (share.bytesServed >= share.maxAllowedBytes) {
++          share.isRevoked = true;
++          share.onRevoked?.call('Byte budget exceeded');
++          req.response
++            ..statusCode = HttpStatus.gone
++            ..write('Byte budget exceeded');
++          await req.response.close();
++          return;
++        }
++
++        final chunkData = await share.getChunk(fid, cid);
++        share.bytesServed += chunkData.length;
++
++        req.response
++          ..statusCode = HttpStatus.ok
++          ..headers.contentType = ContentType('application', 'octet-stream');
++
++        // Write with writeTimeout
++        try {
++          await req.response.addStream(
++            Stream.value(chunkData).timeout(writeTimeout),
++          );
++          await req.response.close();
++        } catch (_) {
++          // Timeout or connection closed by client
++        }
++        return;
++      }
++
++      if (action == 'ack' && req.method == 'POST') {
++        final bodyBytes = await req.fold<List<int>>([], (p, e) => p..addAll(e));
++        if (bodyBytes.isEmpty || bodyBytes.length > 2048) {
++          req.response
++            ..statusCode = HttpStatus.badRequest
++            ..write('Invalid ack payload');
++          await req.response.close();
++          return;
++        }
++
++        // Try decrypting ack
++        Uint8List? decryptedAck;
++        bool isFinal = false;
++
++        // Try final ack first (fileIndex: 0xFFFFFFFF, chunkIndex: 0)
++        try {
++          decryptedAck = share.keys.open(
++            TunnelPurpose.ack,
++            bodyBytes,
++            fileIndex: kTunnelManifestFileIndex,
++            chunkIndex: 0,
++          );
++          isFinal = true;
++        } catch (_) {
++          // If not final ack, check header hints or try (0, 0)
++          final headerFid =
++              int.tryParse(req.headers.value('X-LS-File-Index') ?? '0') ?? 0;
++          final headerCid =
++              int.tryParse(req.headers.value('X-LS-Chunk-Index') ?? '0') ?? 0;
++          try {
++            decryptedAck = share.keys.open(
++              TunnelPurpose.ack,
++              bodyBytes,
++              fileIndex: headerFid,
++              chunkIndex: headerCid,
++            );
++          } catch (_) {
++            // Decryption failed
++            req.response
++              ..statusCode = HttpStatus.unauthorized
++              ..write('Invalid ack signature');
++            await req.response.close();
++            return;
++          }
++        }
++
++        try {
++          final ackMap =
++              jsonDecode(utf8.decode(decryptedAck)) as Map<String, dynamic>;
++          if (ackMap['final'] == true || isFinal) {
++            share.isCompleted = true;
++            share.onCompleted?.call(claim);
++          }
++        } catch (_) {
++          // Ignore JSON decode error if not final
++        }
++
++        req.response.statusCode = HttpStatus.noContent;
++        await req.response.close();
++        return;
++      }
++
++      req.response
++        ..statusCode = HttpStatus.notFound
++        ..write('Unknown action');
++      await req.response.close();
++    } finally {
++      _totalInFlight--;
++      share.concurrentRequests--;
++    }
++  }
++}

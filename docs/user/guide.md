@@ -30,11 +30,11 @@ Before using LibreShare, here is what you should know about how your data is han
 4. **Firewall Notice:** If your Linux system has an active firewall, allow LibreShare to communicate on your local network:
    - On Fedora / RHEL (`firewalld`):
      ```bash
-     sudo firewall-cmd --permanent --add-port=53318-53327/tcp --add-port=53318/udp && sudo firewall-cmd --reload
+     sudo firewall-cmd --permanent --add-port=53318-53349/tcp --add-port=53318/udp && sudo firewall-cmd --reload
      ```
    - On Ubuntu / Debian (`ufw`):
      ```bash
-     sudo ufw allow 53318:53327/tcp && sudo ufw allow 53318/udp
+     sudo ufw allow 53318:53349/tcp && sudo ufw allow 53318/udp
      ```
 
 ### Windows (Zip Archive)
@@ -196,7 +196,7 @@ If devices fail to discover each other automatically, work through these common 
 [SCREENSHOT: Add device screen showing By IP address and By link or QR code tabs]
 
 ### 4. Firewall Blocking LibreShare on PC
-- **The Issue:** Your PC's firewall may be blocking incoming connections on LibreShare's listening ports (UDP 53318 and TCP ports 53318–53327).
+- **The Issue:** Your PC's firewall may be blocking incoming connections on LibreShare's listening ports (UDP 53318 and TCP ports 53318–53349, including direct origin range 53330–53349).
 - **The Solution:**
   - **Windows:** Open Windows Defender Firewall settings, find LibreShare, and verify that it has checkmarks allowed for private networks.
   - **Linux:** In LibreShare, navigate to **Settings** -> expand **Can't see devices?**, copy the suggested firewall command for `ufw` or `firewalld`, and run it in your terminal. You can also tap **Scan the network now** to re-test network visibility.
@@ -262,6 +262,151 @@ If you ever wish to remove LibreShare from your device:
 1. Locate the LibreShare icon on your home screen or app drawer.
 2. Long-press the icon, tap app info or drag to uninstall, and confirm.
 3. *Note:* If you selected a public download folder (such as `Downloads/LibreShare`), all files you received remain intact in your Downloads folder.
+---
+
+## 12. Internet Link Sharing (Direct & Relay)
+
+LibreShare enables sharing files across the internet using encrypted share links without third-party cloud storage or central accounts <!-- source: packages/libreshare_core/lib/src/share/share_link.dart:1-8 -->:
+
+### Creating a Link via CLI
+To create a share link for one or more files from the command line, run `ls link` <!-- source: packages/libreshare_cli/lib/ls_cli.dart:50 -->:
+```bash
+ls link myfile.pdf
+```
+By default, the link stays valid for 1 hour (`--expires 1h`) <!-- source: packages/libreshare_cli/lib/ls_cli.dart:566 -->, permits 1 receiver (`--receivers 1`) <!-- source: packages/libreshare_cli/lib/ls_cli.dart:571 -->, uses the Cloudflare tunnel provider (`--provider cloudflare`) <!-- source: packages/libreshare_cli/lib/ls_cli.dart:576 -->, and selects an ephemeral origin port (`--port 0`) <!-- source: packages/libreshare_cli/lib/ls_cli.dart:581 -->.
+
+### Link URL Format & Fragment Key Security
+Generated share links use the canonical landing base URL `https://libreshare.github.io/r` <!-- source: packages/libreshare_core/lib/src/share/share_link.dart:8 -->:
+```text
+https://libreshare.github.io/r#v=1&h=<host>&t=<token>&k=<key>&r=1&exp=<seconds>&d=<candidates>&pin=<cert-fingerprint>
+```
+- **Protocol Version (`v=1`):** Indicates ShareLink protocol version 1 <!-- source: packages/libreshare_core/lib/src/share/share_link.dart:38 -->.
+- **The Decryption Key (`k=`):** The 32-byte root encryption key sits strictly in the URL hash fragment (`#k=...`) <!-- source: packages/libreshare_core/lib/src/share/share_link.dart:41 -->. Standard HTTP clients and web browsers never transmit fragment identifiers to relays, servers, or intermediaries during HTTP requests.
+- **Max Receivers (`r=`):** Defaults to 1 receiver (`0` allows anyone) <!-- source: packages/libreshare_core/lib/src/share/share_link.dart:42 -->.
+- **Expiration (`exp=`):** Unix timestamp seconds after which the link expires <!-- source: packages/libreshare_core/lib/src/share/share_link.dart:43 -->.
+
+### Direct Origin Transfers & Certificate Pinning
+To maximize speed when both peers have routeable paths, the link includes up to 4 direct IP/port candidates (`d=...`) <!-- source: packages/libreshare_core/lib/src/share/share_link.dart:46 --> and the sender's 64-hex SHA-256 TLS certificate fingerprint (`pin=...`) <!-- source: packages/libreshare_core/lib/src/share/share_link.dart:48 -->:
+- Direct origin transfers listen on ports in the range `53330–53349/tcp` <!-- source: docs/user/guide.md:199 -->.
+- **Pinning Security Invariant:** Connecting clients strictly verify that the direct host presents a certificate matching `pin=`. If `pin=` is invalid, missing, or mismatched, all direct candidates are dropped and the transfer falls back to the encrypted tunnel <!-- source: packages/libreshare_core/lib/src/share/share_link.dart:25, docs/plans/GEMINI_NEXT_STEPS.md:45 -->.
+
+### Privacy Flags for Link Sharing
+- **Hide IP Address (`--hide-ip`):**
+  ```bash
+  ls link --hide-ip myfile.pdf
+  ```
+  Omits direct IP candidates and routes all traffic strictly through the tunnel, hiding the sender's IP address <!-- source: packages/libreshare_cli/lib/ls_cli.dart:586-588 -->.
+- **Automatic Port Mapping (`--port-map`):**
+  ```bash
+  ls link --port-map myfile.pdf
+  ```
+  Requests UPnP-IGD, NAT-PMP, or PCP port mapping on the local gateway router (default off) <!-- source: packages/libreshare_cli/lib/ls_cli.dart:590-593 -->.
+  > [!NOTE]
+  > **[UNVERIFIED: needs live cloudflare tunnel / real router, see USER_TODO.md]**.
+
+### Downloading from a Share Link
+To download files from a link via the CLI, use `ls receive-link` <!-- source: packages/libreshare_cli/lib/ls_cli.dart:52 -->:
+```bash
+ls receive-link "https://libreshare.github.io/r#v=1&..."
+```
+Files are saved to `libreshare-downloads` by default, or to a custom path specified by `--dir DIR` <!-- source: packages/libreshare_cli/lib/ls_cli.dart:600-602 -->.
+In the GUI app, open **Add device**, choose **By link or QR code**, paste the URL, and tap connect.
+
+---
+
+## 13. Transfer Speed Modes
+
+LibreShare includes three configurable transfer speed modes: `eco`, `balanced`, and `turbo` <!-- source: packages/libreshare_core/lib/src/transfer/speed_mode.dart:9-18 -->.
+
+### Mode Profiles & Concurrency
+A speed mode is a **local** setting of the sender device <!-- source: packages/libreshare_core/lib/src/transfer/speed_mode.dart:1-2 -->. It controls how many 4 MiB chunks are transferred in parallel (`chunkConcurrency`) <!-- source: packages/libreshare_core/lib/src/transfer/speed_mode.dart:27-28 -->. The chunk size is fixed at 4 MiB (`kChunkSize = 4 * 1024 * 1024`) <!-- source: packages/libreshare_core/lib/src/protocol.dart:4 --> across all modes.
+
+| Mode | Chunks in Flight | Intended Hardware & Environment | Accepted Aliases |
+|---|---|---|---|
+| **`eco`** | 1 chunk in flight <!-- source: packages/libreshare_core/lib/src/transfer/speed_mode.dart:33 --> | Battery savings, older CPUs, slow storage <!-- source: packages/libreshare_core/lib/src/transfer/speed_mode.dart:10 --> | `slow` <!-- source: packages/libreshare_core/lib/src/transfer/speed_mode.dart:44 --> |
+| **`balanced`** (Default) <!-- source: packages/libreshare_core/lib/src/transfer/speed_mode.dart:21 --> | 3 chunks in flight <!-- source: packages/libreshare_core/lib/src/transfer/speed_mode.dart:34 --> | Standard desktop/laptop Wi-Fi and general use <!-- source: packages/libreshare_core/lib/src/transfer/speed_mode.dart:13 --> | `normal`, `default` <!-- source: packages/libreshare_core/lib/src/transfer/speed_mode.dart:47-48 --> |
+| **`turbo`** | 8 chunks in flight <!-- source: packages/libreshare_core/lib/src/transfer/speed_mode.dart:35 --> | Fast SSDs, multi-gigabit LAN, Wi-Fi 6E/7 <!-- source: packages/libreshare_core/lib/src/transfer/speed_mode.dart:16 --> | `fast`, `high` <!-- source: packages/libreshare_core/lib/src/transfer/speed_mode.dart:51-52 --> |
+
+### Security & Integrity Across Modes
+- Speed modes **never** relax TLS 1.3 encryption, PIN protection, or per-chunk / whole-file SHA-256 integrity checks <!-- source: packages/libreshare_core/lib/src/transfer/speed_mode.dart:2-3 -->.
+- All modes utilize native SHA-256 acceleration (system `libcrypto` on Linux/macOS, `bcrypt` on Windows, falling back gracefully to pure-Dart) <!-- source: packages/libreshare_core/lib/src/transfer/native_sha256.dart:3-6 -->. Native SHA-256 can be disabled via the environment kill-switch `LS_NO_NATIVE_SHA=1` <!-- source: packages/libreshare_core/lib/src/transfer/native_sha256.dart:25-26 -->.
+- Benchmark reference on loopback (300 MiB transfer): eco ~79 secure / ~109 plain MiB/s, balanced ~87 / ~137 MiB/s, turbo ~91 / ~147 MiB/s <!-- source: packages/libreshare_core/lib/src/transfer/speed_mode.dart:3-5, docs/plans/GEMINI_NEXT_STEPS.md:8 -->. Note: these values were measured on one development machine; in real deployments, your physical network connection is usually the limit (gigabit Ethernet maxes out at ~112 MB/s) <!-- source: docs/plans/GEMINI_NEXT_STEPS.md:8 -->.
+
+### Configuring Speed Modes
+- In the CLI, pass `--speed eco|balanced|turbo` to `ls send` <!-- source: packages/libreshare_cli/lib/ls_cli.dart:496-501 -->:
+  ```bash
+  ls send --to 192.168.1.50:53318 --speed turbo large-file.iso
+  ```
+  To override chunk concurrency directly, pass `--concurrency N` <!-- source: packages/libreshare_cli/lib/ls_cli.dart:503-504 -->.
+- In the GUI app, open **Settings** -> **Transfer speed** -> choose **Eco**, **Balanced**, or **Turbo**.
+
+---
+
+## 14. Device Pairing and Out-of-Band Rendezvous
+
+When devices are on different networks, mobile data, or subnets with multicast blocking, LibreShare provides out-of-band device pairing and decentralized rendezvous signaling <!-- source: docs/protocol/rendezvous/LSP-R1.md:12-15 -->:
+
+### Pairing Two Devices
+To pair devices using the CLI:
+1. On Device A, generate and display an invite URI:
+   ```bash
+   ls pair --show
+   ```
+   <!-- source: packages/libreshare_cli/lib/ls_cli.dart:48, 556 -->
+   This generates an invite URI using the format `libreshare://pair?v=1&s=<secret>&fp=<fingerprint>&alias=<alias>` <!-- source: docs/protocol/rendezvous/LSP-R1.md:44 -->. The 32-byte invite secret $S$ remains valid for 10 minutes <!-- source: docs/protocol/rendezvous/LSP-R1.md:41 -->.
+2. On Device B, scan or redeem the invite URI:
+   ```bash
+   ls pair --scan "libreshare://pair?v=1&..."
+   ```
+   <!-- source: packages/libreshare_cli/lib/ls_cli.dart:48, 557 -->
+3. Both screens display a 6-digit confirmation SAS code calculated from mutual nonces and fingerprints <!-- source: packages/libreshare_core/lib/src/security/sas.dart:89-111 -->. Once confirmed, both peers derive a mutual master pairing key $K_\text{pair}$ stored in their secure credential store under `pair:<deviceId>` <!-- source: docs/protocol/rendezvous/LSP-R1.md:39 -->.
+
+### Listing Paired Peers
+To inspect all paired devices in your contacts:
+```bash
+ls peers
+```
+<!-- source: packages/libreshare_cli/lib/ls_cli.dart:49, 561 -->
+Outputs `PEER <deviceId> alias="<alias>" fp=<fingerprint> trust=<trust>` or `No paired peers.` <!-- source: packages/libreshare_cli/lib/ls_cli.dart:2042, 2048 -->.
+
+### Decentralized Rendezvous (Nostr & ntfy)
+- **Signaling Only:** Rendezvous is strictly an out-of-band signaling mechanism for presence and transfer offers; actual file data travels directly over TLS or encrypted tunnels <!-- source: docs/protocol/rendezvous/LSP-R1.md:14-15 -->.
+- **Discrete Ephemeral Channels:** Paired devices communicate over Nostr relays using Kind 20059 ephemeral events <!-- source: docs/protocol/rendezvous/LSP-R1.md:73 --> signed with BIP-340 Schnorr signatures <!-- source: packages/libreshare_core/lib/src/rendezvous/bip340.dart:1 -->. Channel tags rotate daily based on 24-hour UTC epochs ($E = \lfloor \text{unix_seconds} / 86400 \rfloor$) <!-- source: docs/protocol/rendezvous/LSP-R1.md:53 --> to prevent tracking by relay operators.
+- **Alternative Transport:** Fallback to private ntfy topics with a 250 ms poll interval <!-- source: packages/libreshare_core/lib/src/rendezvous/ntfy_backend.dart:14 -->.
+- **Replay Protection:** Envelopes enforce monotonic sequence numbers and reject messages with timestamp skew exceeding 120 seconds (`maxSkew: 120s`) <!-- source: packages/libreshare_core/lib/src/rendezvous/replay_guard.dart:27 -->. Presence records expire after 5 minutes (`ttl: 5m`) <!-- source: packages/libreshare_core/lib/src/rendezvous/presence_cache.dart:31 -->.
+
+---
+
+## 15. Proximity Discovery & Wi-Fi Hotspots (BLE)
+
+> [!NOTE]
+> **[UNVERIFIED: needs hardware, see USER_TODO.md]**. Bluetooth Low Energy (BLE) proximity discovery and autonomous Wi-Fi hotspot role negotiation have been validated against protocol specifications, state machine tests, and virtualized bus simulations; physical Bluetooth and Wi-Fi Direct radio handoff requires testing on physical phones and hardware.
+
+- **Ephemeral BLE Beacons:** Paired devices discover each other nearby using Bluetooth Low Energy (BLE). Devices broadcast an Ephemeral Identifier (EID) derived via HMAC-SHA256 that rotates periodically to prevent third-party physical tracking.
+- **Encrypted GATT Handshake:** Senders and receivers establish an encrypted BLE GATT session (ephemeral X25519 key exchange + AES-256-GCM) to authenticate and exchange connection parameters.
+- **Autonomous Wi-Fi Hotspot Policy:** If no local Wi-Fi router is available, devices evaluate platform roles (`chooseHost`) based on power source, OS capabilities, and battery level:
+  - The elected host activates an encrypted Wi-Fi hotspot and passes temporary credentials over the encrypted BLE channel.
+  - The client joins the hotspot, transfers files over direct TLS, and tears down the hotspot immediately once complete.
+
+---
+
+## 16. Command-Line (CLI) Reference Quick Sheet
+
+The LibreShare command-line interface executable is `ls` <!-- source: packages/libreshare_cli/lib/ls_cli.dart:33 -->.
+
+| Command | Usage & Options | Purpose |
+|---|---|---|
+| `ls info` | `ls info [--to host:port]` <!-- source: packages/libreshare_cli/lib/ls_cli.dart:36 --> | Show a peer's DeviceInfo (or this device's local info) <!-- source: packages/libreshare_cli/lib/ls_cli.dart:36 --> |
+| `ls devices` | `ls devices [--timeout 5] [--json] [--scan] [--listen]` <!-- source: packages/libreshare_cli/lib/ls_cli.dart:37 --> | List devices discovered via multicast/mDNS <!-- source: packages/libreshare_cli/lib/ls_cli.dart:37 --> |
+| `ls receive` | `ls receive --dir DIR [--port N] [--auto-accept] [--once] [--for 30m \| --always] [--visibility everyone\|contacts] [--pin PIN\|auto]` <!-- source: packages/libreshare_cli/lib/ls_cli.dart:38-40 --> | Listen for incoming transfers with configurable PIN and visibility <!-- source: packages/libreshare_cli/lib/ls_cli.dart:38 --> |
+| `ls send` | `ls send (--to host:port \| --device NAME\|ID\|LINK) FILE... [--pin PIN] [--speed eco\|balanced\|turbo]` <!-- source: packages/libreshare_cli/lib/ls_cli.dart:41-42, 496 --> | Send one or more files to a peer <!-- source: packages/libreshare_cli/lib/ls_cli.dart:41 --> |
+| `ls link` | `ls link FILE... [--expires 1h] [--receivers 1] [--provider cloudflare\|zrok\|fake\|manual:URL] [--hide-ip] [--port-map]` <!-- source: packages/libreshare_cli/lib/ls_cli.dart:50-51, 586, 591 --> | Share files via a public internet link <!-- source: packages/libreshare_cli/lib/ls_cli.dart:50 --> |
+| `ls receive-link` | `ls receive-link LINK [--dir DIR]` <!-- source: packages/libreshare_cli/lib/ls_cli.dart:52, 600 --> | Download files from a share link <!-- source: packages/libreshare_cli/lib/ls_cli.dart:52 --> |
+| `ls pair` | `ls pair --show \| --scan URI` <!-- source: packages/libreshare_cli/lib/ls_cli.dart:48, 556-557 --> | Pair two devices by invite (QR text / URI) <!-- source: packages/libreshare_cli/lib/ls_cli.dart:48 --> |
+| `ls peers` | `ls peers` <!-- source: packages/libreshare_cli/lib/ls_cli.dart:49, 561 --> | List paired peers for Internet rendezvous <!-- source: packages/libreshare_cli/lib/ls_cli.dart:49 --> |
+| `ls contacts` | `ls contacts list\|add\|remove\|block\|unblock` <!-- source: packages/libreshare_cli/lib/ls_cli.dart:46 --> | Manage pinned contacts and blocklist <!-- source: packages/libreshare_cli/lib/ls_cli.dart:46 --> |
+| `ls identity` | `ls identity show\|rotate` <!-- source: packages/libreshare_cli/lib/ls_cli.dart:45 --> | Show or rotate this device's persistent cryptographic identity <!-- source: packages/libreshare_cli/lib/ls_cli.dart:45 --> |
+
 
 ---
 

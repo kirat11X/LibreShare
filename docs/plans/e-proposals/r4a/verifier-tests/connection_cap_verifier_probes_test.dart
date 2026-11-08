@@ -5,8 +5,8 @@
 //
 // Labels: P1 PinGuard key, P2 rate limiter, P3 abandoned handshakes, P4 churn, P5 big chunk,
 // P6 stop/start, X1 remote address seen by handler (plain + TLS), X2 peer certificate forwarded,
-// X3 half-closing client (slot released while the socket is still open), X4 stop(force) with a
-// stalled handshake.
+// X3 half-closing client must not escape the per-IP cap. (Round 3: the print-only X4/X5
+// characterisations were removed; X4/X5/X5b/X6/X7/X8 live in connection_cap_verifier_round2_test.dart.)
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -617,54 +617,6 @@ void main() {
     );
     for (final c in socks) {
       c.destroy();
-    }
-  });
-
-  test('X4 stop(force: true) with a TLS client stalled in the handshake: is that socket closed? (characterisation)', () async {
-    final server = _tlsServer();
-    final port = await server.start();
-    final stalled = await Socket.connect('127.0.0.1', port);
-    final closed = Completer<void>();
-    stalled.listen(
-      (_) {},
-      onDone: closed.complete,
-      onError: (Object _) => closed.complete(),
-    );
-    stalled.add([0x16, 0x03, 0x01, 0x02, 0x00]);
-    await stalled.flush();
-    await Future<void>.delayed(const Duration(milliseconds: 200));
-    await server.stop(force: true);
-    var serverClosedIt = true;
-    try {
-      await closed.future.timeout(const Duration(seconds: 3));
-    } on TimeoutException {
-      serverClosedIt = false;
-    }
-    // ignore: avoid_print
-    print('X4 stalled-handshake socket closed by stop(force): $serverClosedIt');
-    stalled.destroy();
-  });
-
-  test('X5 a TLS client that stalls the handshake keeps its slot (characterisation: no handshake timeout)', () async {
-    final server = _tlsServer(total: 8, perIp: 2);
-    final port = await server.start();
-    addTearDown(() => server.stop(force: true));
-    final stalled = <Socket>[];
-    for (var i = 0; i < 2; i++) {
-      final s = await Socket.connect('127.0.0.1', port);
-      s.listen((_) {}, onError: (Object _) {}, cancelOnError: true);
-      s.add([0x16, 0x03, 0x01, 0x02, 0x00]);
-      await s.flush();
-      stalled.add(s);
-    }
-    await Future<void>.delayed(const Duration(seconds: 6));
-    final open = await _openAndCount(port, 1);
-    // ignore: avoid_print
-    print(
-      'X5 after 6 s of stalled handshakes the per-IP slots are still held: new socket open=$open (0 = held)',
-    );
-    for (final s in stalled) {
-      s.destroy();
     }
   });
 }

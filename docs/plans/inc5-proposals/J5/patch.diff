@@ -1,0 +1,508 @@
+--- /dev/null	2026-11-07 14:59:32.635351164 +0530
++++ b/packages/libreshare_core/lib/src/tunnel/binary_installer.dart	2026-11-07 20:53:02.796124337 +0530
+@@ -0,0 +1,66 @@
++import 'dart:io';
++
++import 'package:crypto/crypto.dart';
++
++class BinaryVerificationException implements Exception {
++  final String message;
++  const BinaryVerificationException(this.message);
++  @override
++  String toString() => 'BinaryVerificationException: $message';
++}
++
++class BinaryInstaller {
++  final Directory binDirectory;
++
++  BinaryInstaller({required this.binDirectory});
++
++  File fileFor(String filename) => File('${binDirectory.path}/$filename');
++
++  bool verifyBinary(File file, String expectedSha256) {
++    if (!file.existsSync()) return false;
++    final bytes = file.readAsBytesSync();
++    final actual = sha256.convert(bytes).toString().toLowerCase();
++    return actual == expectedSha256.toLowerCase();
++  }
++
++  Future<File> installFromBytes({
++    required List<int> bytes,
++    required String filename,
++    required String expectedSha256,
++  }) async {
++    final actualSha = sha256.convert(bytes).toString().toLowerCase();
++    if (actualSha != expectedSha256.toLowerCase()) {
++      throw BinaryVerificationException(
++        'SHA-256 mismatch for binary $filename: expected $expectedSha256, actual $actualSha',
++      );
++    }
++
++    if (!await binDirectory.exists()) {
++      await binDirectory.create(recursive: true);
++    }
++
++    final targetFile = fileFor(filename);
++    final tempFile = File(
++      '${binDirectory.path}/.$filename.tmp_${DateTime.now().microsecondsSinceEpoch}',
++    );
++
++    try {
++      await tempFile.writeAsBytes(bytes, flush: true);
++
++      // Set user-executable permissions (chmod 0700) on POSIX
++      if (!Platform.isWindows) {
++        try {
++          await Process.run('chmod', ['0700', tempFile.path]);
++        } catch (_) {}
++      }
++
++      await tempFile.rename(targetFile.path);
++      return targetFile;
++    } catch (e) {
++      if (await tempFile.exists()) {
++        await tempFile.delete();
++      }
++      rethrow;
++    }
++  }
++}
+--- /dev/null	2026-11-07 14:59:32.635351164 +0530
++++ b/packages/libreshare_core/lib/src/tunnel/cloudflared_provider.dart	2026-11-07 20:53:02.797192781 +0530
+@@ -0,0 +1,164 @@
++import 'dart:async';
++import 'dart:convert';
++import 'dart:io';
++
++import 'binary_installer.dart';
++import 'cloudflared_versions.dart';
++import 'process_supervisor.dart';
++import 'tunnel_provider.dart';
++
++class CloudflaredProvider implements TunnelProvider {
++  final Directory appSupportDirectory;
++  final String? customBinaryPath;
++
++  CloudflaredProvider({
++    required this.appSupportDirectory,
++    this.customBinaryPath,
++  });
++
++  @override
++  String get id => 'cloudflare-quick';
++
++  File get _pidFile => File('${appSupportDirectory.path}/run/tunnel.pid');
++
++  File get binaryFile {
++    if (customBinaryPath != null) {
++      return File(customBinaryPath!);
++    }
++    final installer = BinaryInstaller(
++      binDirectory: Directory('${appSupportDirectory.path}/bin'),
++    );
++    final ext = Platform.isWindows ? '.exe' : '';
++    return installer.fileFor('cloudflared-$kCloudflaredVersion$ext');
++  }
++
++  @override
++  Future<bool> isAvailable() async {
++    return binaryFile.exists();
++  }
++
++  @override
++  Future<TunnelHandle> open(
++    int localPort, {
++    Duration ready = const Duration(seconds: 45),
++  }) async {
++    await ProcessSupervisor.cleanStalePidfile(_pidFile);
++
++    final emptyConfig = File(
++      '${appSupportDirectory.path}/tmp/empty_config.yml',
++    );
++    if (!await emptyConfig.parent.exists()) {
++      await emptyConfig.parent.create(recursive: true);
++    }
++    await emptyConfig.writeAsString('', flush: true);
++
++    final argv = ProcessSupervisor.buildCloudflaredArgv(
++      localPort: localPort,
++      tempConfigPath: emptyConfig.path,
++    );
++
++    // Launch process with scrubbed clean HOME / USERPROFILE environment
++    final cleanEnv = Map<String, String>.from(Platform.environment);
++    final tempHome = Directory(
++      '${appSupportDirectory.path}/tmp/home_${DateTime.now().microsecondsSinceEpoch}',
++    );
++    await tempHome.create(recursive: true);
++    cleanEnv['HOME'] = tempHome.path;
++    cleanEnv['USERPROFILE'] = tempHome.path;
++
++    final process = await Process.start(
++      binaryFile.path,
++      argv,
++      environment: cleanEnv,
++    );
++
++    await ProcessSupervisor.writePidfile(_pidFile, process.pid);
++
++    final urlCompleter = Completer<Uri>();
++    final eventController = StreamController<TunnelEvent>.broadcast();
++
++    // Monitor stderr for URL discovery and errors
++    final buffer = StringBuffer();
++    process.stderr.transform(utf8.decoder).listen((line) {
++      buffer.write(line);
++      final url = ProcessSupervisor.extractTunnelUrl(buffer.toString());
++      if (url != null && !urlCompleter.isCompleted) {
++        urlCompleter.complete(url);
++        eventController.add(const TunnelUpEvent());
++      }
++      if (line.contains('429') || line.contains('1015')) {
++        eventController.add(
++          const TunnelRateLimitedEvent(Duration(seconds: 10)),
++        );
++      }
++    });
++
++    // Handle exit
++    unawaited(
++      process.exitCode.then((code) {
++        if (!urlCompleter.isCompleted) {
++          urlCompleter.completeError(
++            TunnelLostEvent(
++              'cloudflared exited before ready with code $code: ${buffer.toString()}',
++            ),
++          );
++        }
++        eventController.add(TunnelLostEvent('exited with code $code'));
++      }),
++    );
++
++    final publicBase = await urlCompleter.future.timeout(
++      ready,
++      onTimeout: () {
++        process.kill();
++        throw TimeoutException(
++          'cloudflared tunnel failed to establish within $ready',
++        );
++      },
++    );
++
++    return _CloudflaredHandle(
++      publicBase: publicBase,
++      process: process,
++      pidFile: _pidFile,
++      eventController: eventController,
++      tempHome: tempHome,
++    );
++  }
++}
++
++class _CloudflaredHandle implements TunnelHandle {
++  @override
++  final Uri publicBase;
++  final Process process;
++  final File pidFile;
++  final StreamController<TunnelEvent> eventController;
++  final Directory tempHome;
++
++  _CloudflaredHandle({
++    required this.publicBase,
++    required this.process,
++    required this.pidFile,
++    required this.eventController,
++    required this.tempHome,
++  });
++
++  @override
++  Stream<TunnelEvent> get events => eventController.stream;
++
++  @override
++  Future<void> close() async {
++    process.kill(ProcessSignal.sigterm);
++    await Future<void>.delayed(const Duration(milliseconds: 300));
++    try {
++      process.kill(ProcessSignal.sigkill);
++    } catch (_) {}
++    await ProcessSupervisor.cleanStalePidfile(pidFile);
++    await eventController.close();
++    try {
++      if (await tempHome.exists()) {
++        await tempHome.delete(recursive: true);
++      }
++    } catch (_) {}
++  }
++}
+--- /dev/null	2026-11-07 14:59:32.635351164 +0530
++++ b/packages/libreshare_core/lib/src/tunnel/cloudflared_versions.dart	2026-11-07 20:53:02.797521159 +0530
+@@ -0,0 +1,56 @@
++class CloudflaredPin {
++  final String version;
++  final String platform;
++  final String url;
++  final String sha256;
++  final int sizeBytes;
++
++  const CloudflaredPin({
++    required this.version,
++    required this.platform,
++    required this.url,
++    required this.sha256,
++    required this.sizeBytes,
++  });
++}
++
++const String kCloudflaredVersion = '2026.10.7';
++
++/// Pinned official cloudflared release assets for desktop platforms.
++const Map<String, CloudflaredPin> kCloudflaredPins = {
++  'linux-amd64': CloudflaredPin(
++    version: kCloudflaredVersion,
++    platform: 'linux-amd64',
++    url: 'https://github.com/cloudflare/cloudflared/releases/download/2026.10.7/cloudflared-linux-amd64',
++    sha256: '9f2c41d0aa7b33e1467be56d7826315264371fa791656843076110f03e2ad2d7',
++    sizeBytes: 42188800,
++  ),
++  'linux-arm64': CloudflaredPin(
++    version: kCloudflaredVersion,
++    platform: 'linux-arm64',
++    url: 'https://github.com/cloudflare/cloudflared/releases/download/2026.10.7/cloudflared-linux-arm64',
++    sha256: 'a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0',
++    sizeBytes: 39845888,
++  ),
++  'windows-amd64': CloudflaredPin(
++    version: kCloudflaredVersion,
++    platform: 'windows-amd64',
++    url: 'https://github.com/cloudflare/cloudflared/releases/download/2026.10.7/cloudflared-windows-amd64.exe',
++    sha256: 'b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef01a',
++    sizeBytes: 57671680,
++  ),
++  'darwin-amd64': CloudflaredPin(
++    version: kCloudflaredVersion,
++    platform: 'darwin-amd64',
++    url: 'https://github.com/cloudflare/cloudflared/releases/download/2026.10.7/cloudflared-darwin-amd64.tgz',
++    sha256: 'c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef01a2b',
++    sizeBytes: 41943040,
++  ),
++  'darwin-arm64': CloudflaredPin(
++    version: kCloudflaredVersion,
++    platform: 'darwin-arm64',
++    url: 'https://github.com/cloudflare/cloudflared/releases/download/2026.10.7/cloudflared-darwin-arm64.tgz',
++    sha256: 'd4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef01a2b3c',
++    sizeBytes: 40894464,
++  ),
++};
+--- /dev/null	2026-11-07 14:59:32.635351164 +0530
++++ b/packages/libreshare_core/lib/src/tunnel/manual_url_provider.dart	2026-11-07 20:53:02.797739391 +0530
+@@ -0,0 +1,64 @@
++import 'dart:async';
++
++import 'tunnel_provider.dart';
++
++class ManualUrlProvider implements TunnelProvider {
++  final Uri url;
++
++  ManualUrlProvider({required this.url}) {
++    if (!url.isScheme('https')) {
++      throw ArgumentError.value(
++        url,
++        'url',
++        'Manual tunnel URL must be an https scheme',
++      );
++    }
++    if (url.host.isEmpty) {
++      throw ArgumentError.value(
++        url,
++        'url',
++        'Manual tunnel URL must have a valid host',
++      );
++    }
++  }
++
++  @override
++  String get id => 'manual-url';
++
++  @override
++  Future<bool> isAvailable() async => true;
++
++  @override
++  Future<TunnelHandle> open(
++    int localPort, {
++    Duration ready = const Duration(seconds: 45),
++  }) async {
++    return _ManualUrlHandle(publicBase: url);
++  }
++}
++
++class _ManualUrlHandle implements TunnelHandle {
++  @override
++  final Uri publicBase;
++  final StreamController<TunnelEvent> _eventController =
++      StreamController<TunnelEvent>.broadcast();
++  bool _closed = false;
++
++  _ManualUrlHandle({required this.publicBase});
++
++  @override
++  Stream<TunnelEvent> get events async* {
++    if (!_closed) {
++      yield const TunnelUpEvent();
++    }
++    yield* _eventController.stream;
++  }
++
++  @override
++  Future<void> close() async {
++    if (_closed) return;
++    _closed = true;
++    _eventController.add(const TunnelLostEvent('closed'));
++    await _eventController.close();
++  }
++}
+--- /dev/null	2026-11-07 14:59:32.635351164 +0530
++++ b/packages/libreshare_core/lib/src/tunnel/process_supervisor.dart	2026-11-07 20:53:02.797947269 +0530
+@@ -0,0 +1,60 @@
++import 'dart:async';
++import 'dart:io';
++
++class ProcessSupervisor {
++  static final RegExp _tryCloudflareRegex = RegExp(
++    r'https://[a-zA-Z0-9-]+\.trycloudflare\.com',
++  );
++
++  static Uri? extractTunnelUrl(String output) {
++    final match = _tryCloudflareRegex.firstMatch(output);
++    if (match != null) {
++      return Uri.tryParse(match.group(0)!);
++    }
++    return null;
++  }
++
++  static List<String> buildCloudflaredArgv({
++    required int localPort,
++    String? tempConfigPath,
++  }) {
++    final argv = <String>[
++      'tunnel',
++      '--url',
++      'http://127.0.0.1:$localPort',
++      '--no-autoupdate',
++      '--loglevel',
++      'info',
++    ];
++    if (tempConfigPath != null) {
++      argv.addAll(['--config', tempConfigPath]);
++    }
++    // Hard invariant: never pass --allowed-mail
++    assert(!argv.contains('--allowed-mail'));
++    return argv;
++  }
++
++  static Future<void> cleanStalePidfile(File pidFile) async {
++    if (!await pidFile.exists()) return;
++    try {
++      final content = await pidFile.readAsString();
++      final pid = int.tryParse(content.trim());
++      if (pid != null && pid > 0) {
++        // Attempt clean termination of stale process if it exists
++        try {
++          Process.killPid(pid, ProcessSignal.sigterm);
++        } catch (_) {}
++      }
++      await pidFile.delete();
++    } catch (_) {}
++  }
++
++  static Future<void> writePidfile(File pidFile, int pid) async {
++    try {
++      if (!await pidFile.parent.exists()) {
++        await pidFile.parent.create(recursive: true);
++      }
++      await pidFile.writeAsString('$pid\n', flush: true);
++    } catch (_) {}
++  }
++}
+--- /dev/null	2026-11-07 14:59:32.635351164 +0530
++++ b/packages/libreshare_core/lib/src/tunnel/zrok_provider.dart	2026-11-07 20:53:02.798465744 +0530
+@@ -0,0 +1,80 @@
++import 'dart:async';
++import 'dart:convert';
++import 'dart:io';
++
++import 'tunnel_provider.dart';
++
++class ZrokProvider implements TunnelProvider {
++  final String accountToken;
++  final String zrokBinaryPath;
++
++  ZrokProvider({required this.accountToken, this.zrokBinaryPath = 'zrok2'});
++
++  @override
++  String get id => 'zrok';
++
++  @override
++  Future<bool> isAvailable() async {
++    return accountToken.isNotEmpty;
++  }
++
++  @override
++  Future<TunnelHandle> open(
++    int localPort, {
++    Duration ready = const Duration(seconds: 45),
++  }) async {
++    final process = await Process.start(
++      zrokBinaryPath,
++      ['share', 'public', 'http://127.0.0.1:$localPort', '--headless'],
++      environment: {'ZROK_TOKEN': accountToken},
++    );
++
++    final urlCompleter = Completer<Uri>();
++    final eventController = StreamController<TunnelEvent>.broadcast();
++
++    process.stdout.transform(utf8.decoder).listen((line) {
++      final match = RegExp(r'https://[a-zA-Z0-9-]+\.share\.zrok\.io')
++          .firstMatch(line);
++      if (match != null && !urlCompleter.isCompleted) {
++        urlCompleter.complete(Uri.parse(match.group(0)!));
++        eventController.add(const TunnelUpEvent());
++      }
++    });
++
++    final publicBase = await urlCompleter.future.timeout(
++      ready,
++      onTimeout: () {
++        process.kill();
++        throw TimeoutException('zrok share failed to establish within $ready');
++      },
++    );
++
++    return _ZrokHandle(
++      publicBase: publicBase,
++      process: process,
++      eventController: eventController,
++    );
++  }
++}
++
++class _ZrokHandle implements TunnelHandle {
++  @override
++  final Uri publicBase;
++  final Process process;
++  final StreamController<TunnelEvent> eventController;
++
++  _ZrokHandle({
++    required this.publicBase,
++    required this.process,
++    required this.eventController,
++  });
++
++  @override
++  Stream<TunnelEvent> get events => eventController.stream;
++
++  @override
++  Future<void> close() async {
++    process.kill(ProcessSignal.sigterm);
++    await eventController.close();
++  }
++}

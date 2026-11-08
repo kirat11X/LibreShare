@@ -1,0 +1,23 @@
+--- a/.gitignore
++++ b/.gitignore
+@@ -8,9 +8,19 @@
+ coverage/
+ dist/
+ 
++# OS artifacts
++.DS_Store
++Thumbs.db
++
++# Ephemeral Flutter & build artifacts
++apps/libreshare_app/.flutter-plugins
++apps/libreshare_app/.flutter-plugins-dependencies
++apps/libreshare_app/linux/flutter/ephemeral
++apps/libreshare_app/windows/flutter/ephemeral
++
+ # Scratch and diagnostic probes
+ test_c_*
+ test_*.dart
+ test_*.c
++*.log
+ packages/libreshare_core/test/scratch_*.dart
+-

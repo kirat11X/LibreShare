@@ -50,3 +50,39 @@ What I will do meanwhile: both halves have tests in the same file; the restart t
 **Q3 (R4e, 10,000-file limit before auth):** option 3. LSP-1 4.3 order stays normative (the proof is verified before the body is decoded; an unauthenticated oversize manifest gets 401, an authenticated one gets 413). The cost before the 401 is one body read (<= 4 MiB) plus one proof verify, already behind the per-IP rate limit and the oversize slot cap, so R4e is closed as "documented limit". A tester adds a regression test that pins the current behaviour (unauthenticated 401, authenticated 413); no `lib/` change and no spec change. A spec change (option 2) would be a protocol change and is not worth it for this cost.
 
 **Q4 (R4c, re-greet after restart):** option 2 for now. The retry half proceeds (no protocol change). The restart half (tests `regreet-after-restart`, and the pin `regreet-rate-limited`) is DEFERRED: LSP-1 4.2 rule 2 ("no reply at all" to an already-listed same-fingerprint announce) exists to stop amplification and I will not amend it inside E5. The deferred test stays in the test file, expected RED, and must not be edited, skipped or weakened by anyone; it is recorded as a known limit (covered by the start-up probe of rule 8; lost UDP reply = documented limit). If the user later wants it, the amendment is: contacts only, at most one re-greeting per contact per 5 s, one sentence in rule 2 and rule 10, plus a conformance test.
+
+---
+
+### Q5 2026-11-07 from Lead (tw.dart 20-run measurement)
+Raw counts from running `source tools/env.sh && dart run .toolchain/scratch/timewait/tw.dart` 20 consecutive times:
+- `REBIND_FAILED errno=98`: 20 / 20 runs (100% reproduction)
+- `REBIND_OK`: 0 / 20 runs
+
+Individual run output:
+1. `REBIND_FAILED errno=98 port=40495`
+2. `REBIND_FAILED errno=98 port=32901`
+3. `REBIND_FAILED errno=98 port=39377`
+4. `REBIND_FAILED errno=98 port=41883`
+5. `REBIND_FAILED errno=98 port=42815`
+6. `REBIND_FAILED errno=98 port=44269`
+7. `REBIND_FAILED errno=98 port=37387`
+8. `REBIND_FAILED errno=98 port=38033`
+9. `REBIND_FAILED errno=98 port=37807`
+10. `REBIND_FAILED errno=98 port=33077`
+11. `REBIND_FAILED errno=98 port=37865`
+12. `REBIND_FAILED errno=98 port=37389`
+13. `REBIND_FAILED errno=98 port=38003`
+14. `REBIND_FAILED errno=98 port=34531`
+15. `REBIND_FAILED errno=98 port=45811`
+16. `REBIND_FAILED errno=98 port=34491`
+17. `REBIND_FAILED errno=98 port=32795`
+18. `REBIND_FAILED errno=98 port=35875`
+19. `REBIND_FAILED errno=98 port=40273`
+20. `REBIND_FAILED errno=98 port=34673`
+
+Conclusion: On this Linux kernel (6.17.7-200.fc42.x86_64), closing the server socket while an active TCP connection has exchanged unread/flushed bytes consistently leaves the local endpoint in TIME_WAIT. An immediate non-shared `ServerSocket.bind` without `SO_REUSEPORT`/`SO_REUSEADDR` fails with errno 98 (EADDRINUSE) 100% of the time.
+
+
+## Q-FR15-ACK-WINDOW (2026-11-07 20:22:40, orchestrator, needs the USER)
+The tester's acceptance tests contradict each other on FR-15 after a hard kill of the receiver: `receiver_restart_test` 'no-put-for-acked-chunk' wants NO re-PUT of any acked chunk, but `inc4_negatives_test` 'resume-diskfull-keeps-state' (resumed ranges [[0,7]] after 9 acks) and `receiver_restart_test` 'sends-only-the-missing' (PUT set {9..19}) assert that resume uses ONLY the sidecar, which is persisted every 8 chunks (kResumePersistEvery). A per-ack journal (candidate: docs/plans/inc4-proposals/F-A2/patch.diff) satisfies the first and breaks the other two; the current code satisfies the other two. Acked-but-unpersisted chunks (at most 7 = 28 MiB) are re-sent after a SIGKILL; the receiver is idempotent so the data stays correct.
+Orchestrator recommendation: accept the 8-chunk window (spec wording "no PUT for a chunk persisted in the sidecar"), change nothing in the code, and replace the strict 'no-put-for-acked-chunk' assertion by "no PUT for a persisted chunk, at most kResumePersistEvery-1 re-sent". Editing acceptance tests is the user's call; until then receiver_restart_test.dart stays OUT of the real tree (inc4_negatives_test is in and green).

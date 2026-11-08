@@ -1,49 +1,79 @@
 #!/usr/bin/env bash
 # tools/bench/gate.sh
-# Increment 4 Throughput Regression Gate (NFR-02)
-# Evaluates measured throughput from tools/bench/benchmarks.csv against baseline.
-# Enforces:
-#  1. Maximum allowable regression <= 20% against baseline (>= 17.0 MiB/s secure, 19.0 MiB/s plain)
-#  2. Clean zero leftovers (*.lspart* cleaned)
-# Prints a clear PASS/FAIL report and exits 0 on PASS, 1 on FAIL.
+# Increment 4 Throughput Regression Gate (NFR-02), per speed mode since S5.
+# Evaluates tools/bench/benchmarks.csv for each speed mode (eco|balanced|turbo) and
+# profile (secure|plain). The evaluated number is the median of the last 3 runs of
+# that mode/profile (rows without a mode column count as balanced).
+# Enforces, per mode/profile:
+#  1. Median >= minimum MiB/s (LS_MIN_<MODE>_<PROFILE> overrides the default)
+#  2. Latest run >= minimum (absolute floor: one catastrophic run fails the gate)
+#  3. Median regression vs baseline <= 20% (LS_BASELINE_<MODE>_<PROFILE> overrides)
+# The CSV is tools/bench/benchmarks.csv unless LS_BENCH_CSV or --csv names another file.
+# Plus: zero leftover partial files (*.lspart*).
+# Prints a per-mode PASS/FAIL table; exits 0 on PASS, 1 on FAIL, 2 on usage error.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck source=tools/env.sh
 source "$ROOT/tools/env.sh"
 
-CSV_FILE="$ROOT/tools/bench/benchmarks.csv"
-BASELINE_SECURE="17.0"
-BASELINE_PLAIN="19.0"
+CSV_FILE="${LS_BENCH_CSV:-$ROOT/tools/bench/benchmarks.csv}"
 MAX_REGRESSION="20.0"
 FORCE_RUN=false
 CHECK_SECURE=false
 CHECK_PLAIN=false
 SIZE_MIB=100
+SAMPLES=3
+SEL_MODES=()
+BASELINE_SECURE_OVERRIDE=""
+BASELINE_PLAIN_OVERRIDE=""
+
+# Minimum MiB/s per mode/profile: about 60% of the measured medians (S5, 2026-11-08).
+# eco: 60% of its measured median (secure 79.0 -> 47, plain 108.8 -> 65); never below 10.
+declare -A MIN_DEFAULT=(
+  [eco_secure]=47 [eco_plain]=65
+  [balanced_secure]=45 [balanced_plain]=65
+  [turbo_secure]=45 [turbo_plain]=80
+)
+# Regression baselines (MiB/s): measured medians of 3 x 300 MiB runs per mode/profile (S5, 2026-11-08).
+declare -A BASE_DEFAULT=(
+  [eco_secure]=79.0 [eco_plain]=108.8
+  [balanced_secure]=87.4 [balanced_plain]=137.3
+  [turbo_secure]=91.0 [turbo_plain]=147.0
+)
 
 usage() {
   cat << EOF
 Usage: $0 [options]
 
-Regression Gate for LibreShare LAN/Loopback Throughput (Increment 4 NFR-02).
+Regression Gate for LibreShare LAN/Loopback Throughput (Increment 4 NFR-02, per speed mode).
 
 Options:
-  --csv <path>              Path to benchmarks.csv (default: tools/bench/benchmarks.csv)
-  --run                     Execute a fresh benchmark run before evaluating
+  --csv <path>              Path to benchmarks.csv (default: $LS_BENCH_CSV or tools/bench/benchmarks.csv)
+  --run                     Execute fresh benchmark runs (one per selected mode) before evaluating
+  --mode <MODE>             Speed mode to evaluate: eco|balanced|turbo (repeatable; default: all)
   --plain                   Evaluate plaintext profile only
   --secure                  Evaluate secure TLS 1.3 profile only
   --both                    Evaluate both secure and plain profiles
   --size-mib <N>            Payload size in MiB when --run is used (default: 100)
-  --baseline-plain <val>    Plaintext baseline target in MiB/s (default: 19.0)
-  --baseline-secure <val>   Secure baseline target in MiB/s (default: 17.0)
+  --baseline-plain <val>    Plaintext baseline for every mode (default: per-mode medians)
+  --baseline-secure <val>   Secure baseline for every mode (default: per-mode medians)
   --max-regression <pct>    Maximum regression percentage allowed (default: 20.0)
   -h, --help                Show this help message
 
+Environment overrides (MiB/s), e.g. LS_MIN_BALANCED_SECURE=50:
+  LS_MIN_<MODE>_<PROFILE>       minimum (MODE: ECO|BALANCED|TURBO, PROFILE: SECURE|PLAIN)
+  LS_BASELINE_<MODE>_<PROFILE>  regression baseline
+
 Exit codes:
-  0: PASS (All throughput targets met within tolerance and no leftovers)
-  1: FAIL (Regression > 20%, leftover files found, or benchmark failure)
+  0: PASS (all modes/profiles meet their minimum and baseline tolerance, no leftovers)
+  1: FAIL (below minimum, regression > limit, missing data, leftover files, or benchmark failure)
   2: Usage / argument error
 EOF
+}
+
+is_number() {
+  [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]
 }
 
 while [[ $# -gt 0 ]]; do
@@ -55,6 +85,16 @@ while [[ $# -gt 0 ]]; do
     --run)
       FORCE_RUN=true
       shift
+      ;;
+    --mode)
+      case "$2" in
+        eco|balanced|turbo) SEL_MODES+=("$2") ;;
+        *)
+          echo "ERROR: --mode must be one of: eco, balanced, turbo (got: $2)" >&2
+          exit 2
+          ;;
+      esac
+      shift 2
       ;;
     --plain)
       CHECK_PLAIN=true
@@ -74,11 +114,11 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --baseline-plain)
-      BASELINE_PLAIN="$2"
+      BASELINE_PLAIN_OVERRIDE="$2"
       shift 2
       ;;
     --baseline-secure)
-      BASELINE_SECURE="$2"
+      BASELINE_SECURE_OVERRIDE="$2"
       shift 2
       ;;
     --max-regression)
@@ -102,23 +142,66 @@ if [[ "$CHECK_PLAIN" == "false" && "$CHECK_SECURE" == "false" ]]; then
   CHECK_SECURE=true
   CHECK_PLAIN=true
 fi
+if [[ ${#SEL_MODES[@]} -eq 0 ]]; then
+  SEL_MODES=(eco balanced turbo)
+fi
 
-# Execute benchmark run if requested or if CSV does not exist
+PROFILES=()
+[[ "$CHECK_SECURE" == "true" ]] && PROFILES+=("secure")
+[[ "$CHECK_PLAIN" == "true" ]] && PROFILES+=("plain")
+
+# Resolve minimum and baseline for a mode/profile: env override, else default.
+# Values are checked for numeric form so a typo fails loudly (exit 2) instead of passing.
+resolve_value() {
+  local kind="$1" mode="$2" prof="$3" var val
+  var="LS_${kind}_${mode^^}_${prof^^}"
+  val="${!var:-}"
+  if [[ -z "$val" ]]; then
+    if [[ "$kind" == "MIN" ]]; then
+      val="${MIN_DEFAULT[${mode}_${prof}]}"
+    else
+      val="${BASE_DEFAULT[${mode}_${prof}]}"
+      if [[ "$prof" == "secure" && -n "$BASELINE_SECURE_OVERRIDE" ]]; then val="$BASELINE_SECURE_OVERRIDE"; fi
+      if [[ "$prof" == "plain" && -n "$BASELINE_PLAIN_OVERRIDE" ]]; then val="$BASELINE_PLAIN_OVERRIDE"; fi
+    fi
+  fi
+  if ! is_number "$val"; then
+    echo "ERROR: $var (or the default) is not a number: '$val'" >&2
+    exit 2
+  fi
+  echo "$val"
+}
+
+# Validate every override up front (before any benchmark run).
+for mode in "${SEL_MODES[@]}"; do
+  for prof in "${PROFILES[@]}"; do
+    resolve_value MIN "$mode" "$prof" >/dev/null
+    resolve_value BASELINE "$mode" "$prof" >/dev/null
+  done
+done
+if ! is_number "$MAX_REGRESSION"; then
+  echo "ERROR: --max-regression must be a number (got: $MAX_REGRESSION)" >&2
+  exit 2
+fi
+
+# Execute benchmark runs if requested or if CSV does not exist
 if [[ "$FORCE_RUN" == "true" ]] || [[ ! -f "$CSV_FILE" ]]; then
-  echo "==> Executing benchmark run via tools/bench/bench_lan.sh..."
-  bench_args=("--output" "$CSV_FILE" "--size-mib" "$SIZE_MIB")
+  bench_profile_args=()
   if [[ "$CHECK_PLAIN" == "true" && "$CHECK_SECURE" == "true" ]]; then
-    bench_args+=("--both")
+    bench_profile_args+=("--both")
   elif [[ "$CHECK_PLAIN" == "true" ]]; then
-    bench_args+=("--plain")
-  elif [[ "$CHECK_SECURE" == "true" ]]; then
-    bench_args+=("--secure")
+    bench_profile_args+=("--plain")
+  else
+    bench_profile_args+=("--secure")
   fi
-
-  if ! bash "$ROOT/tools/bench/bench_lan.sh" "${bench_args[@]}"; then
-    echo "ERROR: Benchmark execution failed!" >&2
-    exit 1
-  fi
+  for mode in "${SEL_MODES[@]}"; do
+    echo "==> Executing benchmark run via tools/bench/bench_lan.sh (mode=$mode)..."
+    if ! bash "$ROOT/tools/bench/bench_lan.sh" "${bench_profile_args[@]}" --speed "$mode" \
+        --output "$CSV_FILE" --size-mib "$SIZE_MIB"; then
+      echo "ERROR: Benchmark execution failed (mode=$mode)!" >&2
+      exit 1
+    fi
+  done
 fi
 
 if [[ ! -f "$CSV_FILE" ]]; then
@@ -127,107 +210,90 @@ if [[ ! -f "$CSV_FILE" ]]; then
 fi
 
 echo "========================================================================="
-echo "LIBRESHARE BENCHMARK REGRESSION GATE (Increment 4 NFR-02)"
+echo "LIBRESHARE BENCHMARK REGRESSION GATE (Increment 4 NFR-02, per speed mode)"
 echo "========================================================================="
 echo "Source Data:       $CSV_FILE"
-echo "Regression Limit:  <= ${MAX_REGRESSION}% vs baseline target"
-echo "Baselines:         secure >= ${BASELINE_SECURE} MiB/s, plain >= ${BASELINE_PLAIN} MiB/s"
+echo "Modes:             ${SEL_MODES[*]}"
+echo "Profiles:          ${PROFILES[*]}"
+echo "Evaluated number:  median of the last $SAMPLES runs per mode/profile (must be >= minimum)"
+echo "Latest-run floor:  the latest run per mode/profile must also be >= minimum (no single catastrophic run passes)"
+echo "Regression Limit:  <= ${MAX_REGRESSION}% vs baseline (median)"
 echo "Integrity:         Zero leftover partial files (*.lspart*)"
 echo "========================================================================="
 
 OVERALL_PASS=true
 FAILURE_REASONS=()
 
-# Determine profiles to evaluate from CSV
-PROFILES=()
-if [[ "$CHECK_SECURE" == "true" ]]; then
-  if grep -q ",secure," "$CSV_FILE" 2>/dev/null; then
-    PROFILES+=("secure")
-  else
-    echo "WARNING: No 'secure' profile benchmark found in $CSV_FILE"
-  fi
-fi
-if [[ "$CHECK_PLAIN" == "true" ]]; then
-  if grep -q ",plain," "$CSV_FILE" 2>/dev/null; then
-    PROFILES+=("plain")
-  else
-    echo "WARNING: No 'plain' profile benchmark found in $CSV_FILE"
-  fi
-fi
+printf '%-9s %-7s %3s %9s %9s %9s %9s %9s %9s %8s  %s\n' \
+  MODE PROFILE N MEDIAN MIN MAX LATEST MINIMUM BASELINE REG% RESULT
 
-if [[ ${#PROFILES[@]} -eq 0 ]]; then
-  echo "ERROR: No matching benchmark records found in $CSV_FILE to evaluate!" >&2
-  exit 1
-fi
+for mode in "${SEL_MODES[@]}"; do
+  for prof in "${PROFILES[@]}"; do
+    minimum=$(resolve_value MIN "$mode" "$prof")
+    baseline=$(resolve_value BASELINE "$mode" "$prof")
 
-for profile in "${PROFILES[@]}"; do
-  # Extract latest record for this profile
-  latest_record=$(awk -F, -v target_prof="$profile" '
-    NR > 1 {
-      # Columns: timestamp,label,profile,size_mib,duration_sec,speed_mib_s,cpu_percent
-      if ($3 == target_prof) {
-        last_ts = $1
-        last_label = $2
-        last_prof = $3
-        last_size = $4
-        last_dur = $5
-        last_speed = $6
-        last_cpu = $7
-        found = 1
+    # Rows: timestamp|label|size|duration|speed|cpu for this mode/profile (no mode column = balanced)
+    rows=$(awk -F, -v p="$prof" -v m="$mode" '
+      NR > 1 {
+        mm = ($8 == "" ? "balanced" : $8)
+        if ($3 == p && mm == m) print $1 "|" $2 "|" $4 "|" $5 "|" $6 "|" $7
       }
-    }
-    END {
-      if (found) {
-        print last_ts "|" last_label "|" last_prof "|" last_size "|" last_dur "|" last_speed "|" last_cpu
-      }
-    }
-  ' "$CSV_FILE")
+    ' "$CSV_FILE")
+    recent=$(printf '%s\n' "$rows" | sed '/^$/d' | tail -n "$SAMPLES")
 
-  if [[ -z "$latest_record" ]]; then
-    echo "ERROR: Failed to parse latest record for profile: $profile" >&2
-    OVERALL_PASS=false
-    FAILURE_REASONS+=("Profile $profile: No record found")
-    continue
-  fi
+    if [[ -z "$recent" ]]; then
+      printf '%-9s %-7s %3s %9s %9s %9s %9s %9s %9s %8s  %s\n' \
+        "$mode" "$prof" 0 - - - - "$minimum" "$baseline" - "FAIL (no data)"
+      OVERALL_PASS=false
+      FAILURE_REASONS+=("$mode/$prof: no benchmark record in $CSV_FILE")
+      continue
+    fi
 
-  IFS="|" read -r r_ts r_label r_prof r_size r_dur r_speed r_cpu <<< "$latest_record"
+    stats=$(printf '%s\n' "$recent" | awk -F'|' '{ print $5 }' | sort -g | awk '
+      NF { a[++n] = $1 }
+      END {
+        if (n % 2) med = a[(n + 1) / 2]; else med = (a[n / 2] + a[n / 2 + 1]) / 2
+        printf "%d %.1f %.1f %.1f", n, med, a[1], a[n]
+      }')
+    read -r n med smin smax <<< "$stats"
 
-  baseline="$BASELINE_SECURE"
-  if [[ "$profile" == "plain" ]]; then
-    baseline="$BASELINE_PLAIN"
-  fi
+    evals=$(awk -v med="$med" -v base="$baseline" -v min="$minimum" -v maxr="$MAX_REGRESSION" '
+      BEGIN {
+        reg = (base > 0) ? ((base - med) / base * 100.0) : 0
+        min_ok = (med + 0 >= min + 0)
+        reg_ok = (reg <= maxr + 0)
+        printf "%.1f %d %d", reg, min_ok, reg_ok
+      }')
+    read -r reg min_ok reg_ok <<< "$evals"
 
-  # Calculate regression and threshold with awk
-  eval_result=$(awk -v base="$baseline" -v speed="$r_speed" -v max_reg="$MAX_REGRESSION" '
-    BEGIN {
-      threshold = base * (1.0 - (max_reg / 100.0));
-      reg_pct = ((base - speed) / base) * 100.0;
-      status = (reg_pct > max_reg) ? "FAIL" : "PASS";
-      printf "%s|%.2f|%.2f", status, reg_pct, threshold;
-    }
-  ')
+    # Absolute floor on the most recent run: a single catastrophic run fails by itself,
+    # even when the median of the last runs still looks fine.
+    latest=$(printf '%s\n' "$recent" | awk -F'|' 'END { print $5 }')
+    latest_ok=$(awk -v l="$latest" -v min="$minimum" 'BEGIN { print (l + 0 >= min + 0) ? 1 : 0 }')
 
-  IFS="|" read -r status reg_pct threshold <<< "$eval_result"
+    failed_checks=()
+    if [[ "$min_ok" != "1" ]]; then
+      failed_checks+=("median below minimum")
+      FAILURE_REASONS+=("$mode/$prof: median ${med} MiB/s is below minimum ${minimum} MiB/s")
+    fi
+    if [[ "$latest_ok" != "1" ]]; then
+      failed_checks+=("latest below minimum")
+      FAILURE_REASONS+=("$mode/$prof: FAIL (latest below minimum): latest run ${latest} MiB/s is below minimum ${minimum} MiB/s")
+    fi
+    if [[ "$reg_ok" != "1" ]]; then
+      failed_checks+=("regression")
+      FAILURE_REASONS+=("$mode/$prof: median ${med} MiB/s regressed ${reg}% vs baseline ${baseline} (> ${MAX_REGRESSION}% allowed)")
+    fi
 
-  echo ""
-  echo "-------------------------------------------------------------------------"
-  echo "Profile:           $profile"
-  echo "-------------------------------------------------------------------------"
-  echo "Latest Run:        $r_ts (label: $r_label, size: ${r_size} MiB)"
-  echo "Measured Speed:    ${r_speed} MiB/s (duration: ${r_dur}s, CPU: ${r_cpu})"
-  echo "Baseline Target:   ${baseline} MiB/s (min allowable: ${threshold} MiB/s)"
-  if awk -v r="$reg_pct" 'BEGIN { exit (r <= 0 ? 0 : 1) }'; then
-    speedup=$(awk -v r="$reg_pct" 'BEGIN { printf "%.2f", -r }')
-    echo "Regression / Diff: +${speedup}% (Speedup above baseline)"
-  else
-    echo "Regression / Diff: -${reg_pct}% vs baseline (limit: -${MAX_REGRESSION}%)"
-  fi
-  echo "Gate Evaluation:   $status"
+    result="PASS"
+    if [[ ${#failed_checks[@]} -gt 0 ]]; then
+      OVERALL_PASS=false
+      result="FAIL ($(printf '%s, ' "${failed_checks[@]}" | sed 's/, $//'))"
+    fi
 
-  if [[ "$status" != "PASS" ]]; then
-    OVERALL_PASS=false
-    FAILURE_REASONS+=("Profile $profile: speed ${r_speed} MiB/s regressed by ${reg_pct}% (> ${MAX_REGRESSION}% allowed)")
-  fi
+    printf '%-9s %-7s %3s %9s %9s %9s %9s %9s %9s %8s  %s\n' \
+      "$mode" "$prof" "$n" "$med" "$smin" "$smax" "$latest" "$minimum" "$baseline" "$reg" "$result"
+  done
 done
 
 # -----------------------------------------------------------------------------
@@ -262,7 +328,7 @@ echo ""
 echo "========================================================================="
 if [[ "$OVERALL_PASS" == "true" ]]; then
   echo "OVERALL REGRESSION GATE: PASS (exit code 0)"
-  echo "All evaluated throughput metrics met the NFR-02 gate requirements."
+  echo "All evaluated throughput medians met their per-mode minimums and baselines."
   echo "========================================================================="
   exit 0
 else

@@ -1,5 +1,5 @@
---- packages/libreshare_core/lib/src/security/secret_redactor.dart	1970-01-01 05:30:00.000000000 +0530
-+++ .toolchain/scratch/inc5-h3-secret-redactor/clone/packages/libreshare_core/lib/src/security/secret_redactor.dart	1970-01-01 05:30:00.000000000 +0530
+--- a/packages/libreshare_core/lib/src/security/secret_redactor.dart	1970-01-01 05:30:00.000000000 +0530
++++ b/packages/libreshare_core/lib/src/security/secret_redactor.dart	1970-01-01 05:30:00.000000000 +0530
 @@ -0,0 +1,86 @@
 +import 'package:logging/logging.dart';
 +

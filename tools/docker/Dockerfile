@@ -51,7 +51,7 @@ RUN apt-get update \
 COPY --from=build /out/ls /usr/local/bin/libreshare
 
 # Last layers: editing a test script does not invalidate the (slow) compile above.
-COPY tools/docker/e2e.sh tools/docker/alice.sh tools/docker/bob.sh tools/docker/carol.sh tools/docker/dave.sh tools/docker/legacy.sh /usr/local/bin/
+COPY tools/docker/e2e.sh tools/docker/alice.sh tools/docker/bob.sh tools/docker/carol.sh tools/docker/dave.sh tools/docker/legacy.sh tools/docker/cut_wifi.sh /usr/local/bin/
 RUN chmod 0755 /usr/local/bin/*.sh
 
 USER libreshare

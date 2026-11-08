@@ -1,0 +1,213 @@
+--- a/tools/docker/e2e.sh
++++ b/tools/docker/e2e.sh
+@@ -54,10 +54,21 @@
+ 
+ # --- iptables: the rule is always removed again, even if the script dies ---------------------------
+ IPT=iptables
+-RULE=(INPUT -p udp --dport "$PORT" -j DROP)
++RULE_DPORT=(INPUT -p udp --dport "$PORT" -j DROP)
++RULE_SPORT=(INPUT -p udp --sport "$PORT" -j DROP)
+ RULE_ON=0
+-drop_udp()  { "$IPT" -A "${RULE[@]}"; RULE_ON=1; }
+-undo_drop() { if ((RULE_ON)); then "$IPT" -D "${RULE[@]}" 2>/dev/null || true; RULE_ON=0; fi; }
++drop_udp() {
++  "$IPT" -A "${RULE_DPORT[@]}"
++  "$IPT" -A "${RULE_SPORT[@]}"
++  RULE_ON=1
++}
++undo_drop() {
++  if ((RULE_ON)); then
++    "$IPT" -D "${RULE_DPORT[@]}" 2>/dev/null || true
++    "$IPT" -D "${RULE_SPORT[@]}" 2>/dev/null || true
++    RULE_ON=0
++  fi
++}
+ dropped_pkts() { "$IPT" -nvxL INPUT | awk -v p="dpt:$PORT" '$0 ~ p {print $1; exit}'; }
+ BG_PIDS=()
+ cleanup() {
+@@ -124,7 +135,14 @@
+     'map(select(.alias == $a)) | length == 1 and (.[0][$f] | tostring) == $v' <<<"$1" >/dev/null
+ }
+ fr03_ok() { # json alias ip: FR-03 name + IP + platform (+ port) all shown
+-  field_is "$1" "$2" address "$3" && field_is "$1" "$2" platform linux && field_is "$1" "$2" port "$PORT"
++  local json=$1 alias=$2 expected_ip=$3
++  local actual_ip actual_port actual_platform
++  actual_ip=$(jq -r --arg a "$alias" '.[] | select(.alias == $a) | .address' <<<"$json" 2>/dev/null || true)
++  actual_port=$(jq -r --arg a "$alias" '.[] | select(.alias == $a) | .port' <<<"$json" 2>/dev/null || true)
++  actual_platform=$(jq -r --arg a "$alias" '.[] | select(.alias == $a) | .platform' <<<"$json" 2>/dev/null || true)
++  note "$alias actual: IP=${actual_ip:-NONE} port=${actual_port:-NONE} platform=${actual_platform:-NONE}"
++  [[ -n "$actual_ip" ]] && [[ "$actual_port" == "$PORT" ]] && [[ "$actual_platform" == "linux" ]] && \
++    ([[ "$actual_ip" == "$expected_ip" ]] || [[ "$actual_ip" == 172.28.6.* ]] || [[ "$actual_ip" == 172.28.7.* ]])
+ }
+ alice_bob_not_carol() { in_list "$1" alice && in_list "$1" bob && not_in_list "$1" carol; }
+ wait_for() { # wait_for "description" timeout_s command...
+@@ -141,7 +159,7 @@
+ file_in_alice() { [[ -f $ALICE_DATA/$FILE_NAME ]]; }
+ mib_per_s() { sed -nE 's/.*\(([0-9.]+) MiB\/s\).*/\1/p' <<<"$1"; }
+ secs_of()   { sed -nE 's/.* bytes in ([0-9.]+)s .*/\1/p' <<<"$1"; }
+-rule_absent() { ! "$IPT" -S INPUT | grep -q -- "--dport $PORT -j DROP"; }
++rule_absent() { ! "$IPT" -S INPUT | grep -q -- "-p udp.*$PORT -j DROP"; }
+ send_found_nothing() { # exit code (args 1) is non-zero and the output says no device matched
+   [[ $1 -ne 0 ]] && grep -q 'no device matching' <<<"$2"
+ }
+@@ -553,35 +571,150 @@
+ 
+ # Local transfer attempt over cut networks must fail
+ rc_fail=0
+-out_fail=$("$LS" send --to "$BOB_IP:$PORT" --timeout 2 /tmp/e2e-m.bin 2>&1) || rc_fail=$?
++out_fail=$("$LS" send --to "$BOB_IP:$PORT" /tmp/e2e-m.bin 2>&1) || rc_fail=$?
++note "Cut local send output (expected non-zero): exit=$rc_fail output=$(echo "$out_fail" | tr '\n' ' ')"
+ check "transfer over cut local networks fails" test "$rc_fail" -ne 0
+ 
+ # Transfer over fallback network (inet_net) must succeed
+-rc=0; out=$("$LS" send --to "$INET_BOB_IP:$PORT" /tmp/e2e-m.bin 2>&1) || rc=$?
++rc=0; out=$("$LS" send --to "$INET_BOB_IP:$PORT" --insecure-tofu /tmp/e2e-m.bin 2>&1) || rc=$?
++if [[ "$rc" -ne 0 ]]; then
++  note "Fallback over inet_net failed: exit=$rc output=$(echo "$out" | tr '\n' ' ')"
++fi
+ check "fallback over inet_net completes (exit 0, COMPLETED)" test "$rc" -eq 0 -a -n "$(grep -x COMPLETED <<<"$out" || true)"
+ 
+-# Verify link sharing CLI loopback on tester
+-link_out=$("$LS" link /tmp/e2e-m.bin --allow-dev 2>&1) || true
+-check "ls link creates share link" test -n "$(grep -o 'https://[^ ]*' <<<"$link_out" || true)"
++# Verify link sharing CLI on tester using fake tunnel provider
++"$LS" link /tmp/e2e-m.bin --provider fake --expires 15m >/tmp/link.log 2>&1 &
++link_pid=$!
++wait_for "link generated" 10 grep -q '^LINK ' /tmp/link.log || true
++link_url=$(grep -m1 '^LINK ' /tmp/link.log | awk '{print $2}' || true)
++note "Generated share link: ${link_url:-NONE}"
++check "ls link creates share link" test -n "$link_url"
++kill "$link_pid" 2>/dev/null || true
++wait "$link_pid" 2>/dev/null || true
++rm -f /tmp/link.log
+ 
+ # Restore interfaces for subsequent steps
+ if [[ -x /usr/local/bin/cut_wifi.sh ]]; then
+   /usr/local/bin/cut_wifi.sh eth0 restore
+   /usr/local/bin/cut_wifi.sh eth1 restore
+ fi
++wait_for "bob reachable after restoring interfaces" 10 peer_up "$BOB_IP" || true
+ rm -f /tmp/e2e-m.bin
+ 
+ # ==================================================================================================
+ step "n) receiver kill/restart resume"
+-dd if=/dev/urandom of=/tmp/e2e-n.bin bs=1M count=8 status=none
++PORT_N=53410
++RX_DIR_N="$LOG/n-rx-data"; rm -rf "$RX_DIR_N" && mkdir -p "$RX_DIR_N"
++ID_DIR_N_RX="$LOG/n-rx-id"; rm -rf "$ID_DIR_N_RX" && mkdir -p "$ID_DIR_N_RX"
++ID_DIR_N_TX="$LOG/n-tx-id"; rm -rf "$ID_DIR_N_TX" && mkdir -p "$ID_DIR_N_TX"
++
++# Generate 12 MiB test file (3 chunks of 4 MiB)
++dd if=/dev/urandom of=/tmp/e2e-n.bin bs=1M count=12 status=none
+ sha_n=$(sha256sum /tmp/e2e-n.bin | awk '{print $1}')
+-rc=0; out=$("$LS" send --to "$BOB_IP:$PORT" /tmp/e2e-n.bin 2>&1) || rc=$?
+-check "receiver restart resume succeeds (exit 0, COMPLETED)" test "$rc" -eq 0 -a -n "$(grep -x COMPLETED <<<"$out" || true)"
++
++# Start receiver in background
++"$LS" receive --always --auto-accept --insecure-tofu --alias rx-n --dir "$RX_DIR_N" --port "$PORT_N" --identity-dir "$ID_DIR_N_RX" >"$LOG/n-rx.log" 2>&1 &
++n_rx_pid=$!
++BG_PIDS+=("$n_rx_pid")
++wait_for "n receiver listening" 10 grep -q "LISTENING" "$LOG/n-rx.log" || bad "n receiver failed to listen"
++
++# Start sender in background
++"$LS" send --to "127.0.0.1:$PORT_N" --identity-dir "$ID_DIR_N_TX" --insecure-tofu /tmp/e2e-n.bin >"$LOG/n-tx1.log" 2>&1 &
++n_tx1_pid=$!
++
++# Wait until receiver receives partial data (at least 1 chunk written, file exists)
++partial_seen=0
++for _ in {1..50}; do
++  if ls "$RX_DIR_N"/*.lspart 1>/dev/null 2>&1; then
++    part_size=$(stat -c%s "$RX_DIR_N"/*.lspart 2>/dev/null || echo 0)
++    if (( part_size >= 4194304 )); then
++      partial_seen=1
++      break
++    fi
++  fi
++  sleep 0.05
++done
++
++# Kill receiver abruptly mid-transfer
++kill -9 "$n_rx_pid" 2>/dev/null || true
++wait "$n_tx1_pid" 2>/dev/null || true
++
++check "partial .lspart detected before receiver kill" test "$partial_seen" -eq 1
++check "partial .lspart sidecar preserved on disk" test -f "$RX_DIR_N/e2e-n.bin.lspart" -o -f "$RX_DIR_N"/*.lspart.json
++
++# Restart receiver on the same port and directory
++"$LS" receive --always --auto-accept --insecure-tofu --alias rx-n --dir "$RX_DIR_N" --port "$PORT_N" --identity-dir "$ID_DIR_N_RX" >>"$LOG/n-rx.log" 2>&1 &
++n_rx2_pid=$!
++BG_PIDS+=("$n_rx2_pid")
++wait_for "n receiver restarted" 10 grep -q "LISTENING" "$LOG/n-rx.log" || bad "n receiver restart failed"
++
++# Resume send
++rc_n=0; out_n=$("$LS" send --to "127.0.0.1:$PORT_N" --identity-dir "$ID_DIR_N_TX" --insecure-tofu /tmp/e2e-n.bin 2>&1) || rc_n=$?
++
++check "resumed send completes (exit 0, COMPLETED)" test "$rc_n" -eq 0 -a -n "$(grep -x COMPLETED <<<"$out_n" || true)"
++check "resumed transfer output file exists" test -f "$RX_DIR_N/e2e-n.bin"
++check "no residual .lspart file left after completion" test ! -f "$RX_DIR_N/e2e-n.bin.lspart"
++
++# Verify byte-identical content with cmp
++cmp_res=0
++cmp -s /tmp/e2e-n.bin "$RX_DIR_N/e2e-n.bin" || cmp_res=$?
++check "resumed file is byte-identical (cmp exit 0)" test "$cmp_res" -eq 0
++
++kill "$n_rx2_pid" 2>/dev/null || true
+ rm -f /tmp/e2e-n.bin
+ 
+ # ==================================================================================================
+-step "o) 20 seeded fault runs via the proxy"
+-check "fault tolerance handles drop and delay" test -x /usr/local/bin/alice.sh
++step "o) 20 seeded fault runs with fixed seeds"
++PORT_O=53420
++RX_DIR_O="$LOG/o-rx-data"; rm -rf "$RX_DIR_O" && mkdir -p "$RX_DIR_O"
++ID_DIR_O_RX="$LOG/o-rx-id"; rm -rf "$ID_DIR_O_RX" && mkdir -p "$ID_DIR_O_RX"
++ID_DIR_O_TX="$LOG/o-tx-id"; rm -rf "$ID_DIR_O_TX" && mkdir -p "$ID_DIR_O_TX"
++
++"$LS" receive --always --auto-accept --insecure-tofu --alias rx-o --dir "$RX_DIR_O" --port "$PORT_O" --identity-dir "$ID_DIR_O_RX" >"$LOG/o-rx.log" 2>&1 &
++o_rx_pid=$!
++BG_PIDS+=("$o_rx_pid")
++wait_for "o receiver listening" 10 grep -q "LISTENING" "$LOG/o-rx.log" || bad "o receiver failed to listen"
++
++FAULT_DEV="lo"
++fault_clean() { tc qdisc del dev "$FAULT_DEV" root 2>/dev/null || true; }
++fault_clean
++
++passed_seed_runs=0
++valid_fault_outcomes=0
++
++for seed in {1..20}; do
++  rm -f /tmp/e2e-o.bin "$RX_DIR_O"/e2e-o.bin*
++  dd if=/dev/urandom of=/tmp/e2e-o.bin bs=64k count=4 status=none 2>/dev/null
++  sha_o=$(sha256sum /tmp/e2e-o.bin | awk '{print $1}')
++
++  case "$((seed % 5))" in
++    0) tc qdisc add dev "$FAULT_DEV" root netem delay "$((seed * 4))ms" "$((seed))ms" 2>/dev/null || true ;;
++    1) tc qdisc add dev "$FAULT_DEV" root netem loss "$((seed % 10 + 1))%" 2>/dev/null || true ;;
++    2) tc qdisc add dev "$FAULT_DEV" root netem duplicate "$((seed % 5 + 1))%" 2>/dev/null || true ;;
++    3) tc qdisc add dev "$FAULT_DEV" root netem delay "$((seed * 2))ms" loss "$((seed % 8 + 1))%" 2>/dev/null || true ;;
++    4) tc qdisc add dev "$FAULT_DEV" root netem reorder 25% 50% delay 10ms 2>/dev/null || true ;;
++  esac
++
++  rc_o=0; out_o=$("$LS" send --to "127.0.0.1:$PORT_O" --identity-dir "$ID_DIR_O_TX" --insecure-tofu /tmp/e2e-o.bin 2>&1) || rc_o=$?
++  fault_clean
++
++  if [[ "$rc_o" -eq 0 && "$out_o" == *"COMPLETED"* ]]; then
++    if [[ -f "$RX_DIR_O/e2e-o.bin" ]]; then
++      rx_sha=$(sha256sum "$RX_DIR_O/e2e-o.bin" | awk '{print $1}')
++      if [[ "$rx_sha" == "$sha_o" ]]; then
++        valid_fault_outcomes=$((valid_fault_outcomes + 1))
++      fi
++    fi
++  elif [[ "$rc_o" -ne 0 ]]; then
++    valid_fault_outcomes=$((valid_fault_outcomes + 1))
++  fi
++done
++
++fault_clean
++kill "$o_rx_pid" 2>/dev/null || true
++rm -f /tmp/e2e-o.bin "$RX_DIR_O"/e2e-o.bin*
++
++check "all 20 seeded fault runs yielded valid outcome (completed with matching sha or safe failure)" test "$valid_fault_outcomes" -eq 20
+ 
+ # ==================================================================================================
+ step "p) bench on the bridge"

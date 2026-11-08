@@ -108,6 +108,11 @@ class EngineNotifier extends AsyncNotifier<LibreShareEngine> {
       ),
     );
     ref.watch(pinRevisionProvider);
+    // The speed mode does not need a rebuild: the running engine follows it.
+    ref.listen(settingsProvider.select((s) => s.speedMode), (_, mode) {
+      final running = state.value;
+      if (running != null) running.speedMode = mode;
+    });
     // Only a suggestion for a first run (the stored identity wins), so a
     // change of it does not rebuild the engine.
     final suggestedId = ref.read(settingsProvider).deviceId;
@@ -174,6 +179,7 @@ class EngineNotifier extends AsyncNotifier<LibreShareEngine> {
     }
 
     final engine = LibreShareEngine(
+      speedMode: ref.read(settingsProvider).speedMode,
       self: DeviceInfo(
         deviceId: storedDeviceId,
         alias: settings.alias,

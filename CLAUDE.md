@@ -17,6 +17,11 @@ P2P file sharing: Flutter UI + pure-Dart core. Spec: docs/LIBRESHARE_BUILD_SPEC.
 - **Flow per package:** tester red -> coder green -> tester verify -> orchestrator gate. Security-critical packages (crypto, TLS/auth, trust, pairing, key storage) get at least a medium coder and a second tester review.
 - Resumed agents keep the effort they were spawned with: to change a role, spawn a fresh agent.
 
+## TOKEN-SAVING MODE (user decision 2026-11-07; applies until the user ends it)
+- Finish the whole project first, deep review by the orchestrator afterwards. Orchestrator reads only compact summaries and does not re-derive agent/Gemini claims; every cheaper acceptance is logged in docs/plans/DEEP_REVIEW_QUEUE.md.
+- Testers, gate runners, appliers and doc writers: `model: "haiku"`. Coders: haiku, or sonnet with `effort: "low"` when haiku fails twice. Gemini (the Lead) continues Inc 5..7 cards in order; its READY cards are applied after a full-suite gate (script `.toolchain/scratch/gates/full_gate.sh <name>` under `flock -o /tmp/libreshare-heavy.lock`) without a separate orchestrator re-derivation.
+- Hard rules unchanged: never weaken/edit acceptance tests, no secrets in logs, nothing deleted, no commit/push, TLS and integrity checks never weakened.
+
 ## Toolchain (project-local, gitignored)
 `source tools/env.sh` puts Flutter 3.47.9 / Dart 3.13.7 on PATH and sets PUB_CACHE=.toolchain/pub-cache.
 It also sets JAVA_HOME (JDK 17), ANDROID_HOME and GRADLE_USER_HOME when `.toolchain/{jdk-17,android-sdk,gradle}` exist (see docs/dev/android-toolchain.md). Wrap every `flutter build|test` in `flock /tmp/libreshare-flutter-build.lock` when several agents work at once. Prototype builds: `tools/package_prototype.sh [linux|android|windows]` -> `dist/prototype/` (Windows only on a Windows host or via `.github/workflows/prototype.yml`).

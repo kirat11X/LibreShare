@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://libreshare.org/schemas/ble-decision.schema.json",
+  "title": "BleDecision",
+  "description": "LS-BLE/1 Encrypted receiver decision (consent/rejection).",
+  "type": "object",
+  "required": ["type", "offerId", "accept"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "decision"
+    },
+    "offerId": {
+      "type": "string"
+    },
+    "accept": {
+      "type": "boolean"
+    },
+    "reason": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

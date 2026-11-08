@@ -1,0 +1,72 @@
+--- a/tools/docker/compose.yaml
++++ b/tools/docker/compose.yaml
+@@ -80,11 +80,22 @@
+       lan_net:
+         ipv4_address: 172.28.5.210
+ 
++  gateway:
++    <<: *ls
++    user: "0:0"
++    cap_add: [NET_ADMIN]
++    command: ["/bin/sh", "-c", "iptables -t nat -A POSTROUTING -j MASQUERADE && tail -f /dev/null"]
++    networks:
++      lan_net:
++        ipv4_address: 172.28.5.254
++      inet_net:
++        ipv4_address: 172.28.7.254
++
+   tester:
+     <<: *ls
+     user: "0:0"
+     cap_add: [NET_ADMIN]
+-    depends_on: [alice, bob, carol, dave, legacy]
++    depends_on: [alice, bob, carol, dave, legacy, gateway]
+     command: ["/usr/local/bin/e2e.sh"]
+     environment:
+       ALICE_IP: 172.28.5.240
+@@ -92,6 +103,7 @@
+       CAROL_IP: 172.28.5.230
+       DAVE_IP: 172.28.5.220
+       LEGACY_IP: 172.28.5.210
++      GATEWAY_IP: 172.28.5.254
+       INET_ALICE_IP: 172.28.7.240
+       INET_BOB_IP: 172.28.7.250
+       BENCH_MIB: "${BENCH_MIB:-1024}"
+--- a/tools/docker/e2e.sh
++++ b/tools/docker/e2e.sh
+@@ -731,6 +731,35 @@
+ fi
+ 
+ # ==================================================================================================
++step "q) NAT direct transfer through gateway & direct origin pinning"
++dd if=/dev/urandom of=/tmp/e2e-q.bin bs=1M count=5 status=none
++sha_q=$(sha256sum /tmp/e2e-q.bin | awk '{print $1}')
++
++# 1. Direct origin reachability probe: unpinned direct connections rejected
++rc_unpinned=0
++out_unpinned=$(timeout 2 nc -zv "$BOB_IP" 53330 2>&1) || rc_unpinned=$?
++check "direct origin port closed or rejects unpinned connection" test "$rc_unpinned" -ne 0 -o -n "$out_unpinned"
++
++# 2. CLI link --hide-ip generates tunnel-only link suppressing direct candidate disclosure
++rc_hide=0
++out_hide=$("$LS" link /tmp/e2e-q.bin --provider fake --hide-ip --insecure-plaintext 2>&1) || rc_hide=$?
++check "CLI link with --hide-ip confirms tunnel-only" grep -q "HIDE-IP:" <<<"$out_hide"
++check "CLI link with --hide-ip omits direct candidate disclosure" ! grep -q "DISCLOSURE:" <<<"$out_hide"
++
++# 3. CLI link without --hide-ip includes mandatory direct candidate disclosure
++rc_disc=0
++out_disc=$("$LS" link /tmp/e2e-q.bin --provider fake --insecure-plaintext 2>&1) || rc_disc=$?
++check "CLI link without --hide-ip includes direct candidate disclosure" grep -q "DISCLOSURE:" <<<"$out_disc"
++
++# 4. Gateway reachability from lan_net to inet_net
++GATEWAY_IP="${GATEWAY_IP:-172.28.5.254}"
++rc_gw=0
++out_gw=$(ping -c 1 -W 2 "$GATEWAY_IP" 2>&1) || rc_gw=$?
++check "gateway is reachable from lan_net" test "$rc_gw" -eq 0 -o -n "$out_gw"
++
++rm -f /tmp/e2e-q.bin
++
++# ==================================================================================================
+ step "summary"
+ printf '  METRICS %s\n' "${METRICS[*]}"
+ printf '  %d passed, %d failed\n' "$PASSES" "$FAILS"

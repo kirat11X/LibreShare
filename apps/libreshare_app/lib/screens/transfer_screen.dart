@@ -44,6 +44,7 @@ String failureText(TransferView t) {
       {'peer': t.peerAlias},
     ),
     FailureReason.diskFull => tr('failure.diskFull'),
+    FailureReason.storageUnusable => tr('failure.storageUnusable'),
     FailureReason.protocolError || null => tr('failure.protocol'),
   };
 }

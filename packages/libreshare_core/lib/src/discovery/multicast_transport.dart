@@ -46,6 +46,18 @@ abstract interface class MulticastTransport {
   Future<void> stop();
 }
 
+/// Optional capability of a [MulticastTransport]: send a send-only probe (LSP-1
+/// 4.2 rule 8) from a socket with its OWN ephemeral source port, which also
+/// receives the unicast replies. Needed on a host that runs several LibreShare
+/// processes: they share the discovery port (`SO_REUSEPORT`), so a reply sent
+/// to "probe source:port" = the shared port is delivered to one of the sockets
+/// bound to it (often the replier's own), not necessarily to the prober.
+abstract interface class ProbeFromEphemeralPort {
+  /// Multicasts [data] from the ephemeral probe socket (opened on first use,
+  /// closed by `stop`). Best effort.
+  void sendProbeFromEphemeralPort(List<int> data);
+}
+
 /// [MulticastTransport] over a `RawDatagramSocket` bound to `0.0.0.0:port`.
 ///
 /// * The group is joined on every non-loopback IPv4 interface reported by
@@ -55,7 +67,8 @@ abstract interface class MulticastTransport {
 ///   send. Per-interface failures are logged and tolerated.
 /// * Datagrams are sent from the listening socket, so a receiver can answer
 ///   [MulticastPacket.port] directly.
-class RawMulticastTransport implements MulticastTransport {
+class RawMulticastTransport
+    implements MulticastTransport, ProbeFromEphemeralPort {
   RawMulticastTransport({
     this.ifaces = const SystemNetworkInterfaceProvider(),
     this.port = kDefaultPort,
@@ -79,6 +92,9 @@ class RawMulticastTransport implements MulticastTransport {
       StreamController<MulticastPacket>.broadcast();
 
   RawDatagramSocket? _socket;
+  RawDatagramSocket? _probeSocket;
+  Future<RawDatagramSocket?>? _probeOpening;
+  StreamSubscription<RawSocketEvent>? _probeSub;
   StreamSubscription<RawSocketEvent>? _sub;
   late InternetAddress _group;
   List<LocalInterface> _sendIfaces = const [];
@@ -120,7 +136,7 @@ class RawMulticastTransport implements MulticastTransport {
   // Read events are edge-triggered: drain until empty, but yield to the event
   // loop every 64 datagrams so a flood cannot starve the isolate.
   void _drain(RawDatagramSocket socket) {
-    if (!identical(socket, _socket)) return;
+    if (!identical(socket, _socket) && !identical(socket, _probeSocket)) return;
     for (var i = 0; i < 64; i++) {
       final d = socket.receive();
       if (d == null) return;
@@ -226,6 +242,10 @@ class RawMulticastTransport implements MulticastTransport {
   void sendMulticast(List<int> data) {
     final socket = _socket;
     if (socket == null) return;
+    _sendGroup(socket, data);
+  }
+
+  void _sendGroup(RawDatagramSocket socket, List<int> data) {
     final bytes = data is Uint8List ? data : Uint8List.fromList(data);
     var sent = false;
     for (final li in _sendIfaces) {
@@ -252,6 +272,51 @@ class RawMulticastTransport implements MulticastTransport {
   }
 
   @override
+  void sendProbeFromEphemeralPort(List<int> data) {
+    if (_socket == null) return;
+    final open = _probeSocket;
+    if (open != null) {
+      _sendGroup(open, data);
+      return;
+    }
+    // Opened on first use; this probe goes out as soon as the socket exists.
+    final opening = _probeOpening ??= _openProbeSocket();
+    opening.then((s) {
+      if (s != null) _sendGroup(s, data);
+    });
+  }
+
+  Future<RawDatagramSocket?> _openProbeSocket() async {
+    try {
+      final s = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+      if (_socket == null) {
+        s.close();
+        return null;
+      }
+      try {
+        s.multicastLoopback = loopback;
+        s.multicastHops = 1;
+      } on Object catch (e) {
+        _log.fine('could not tune probe socket options: $e');
+      }
+      _probeSocket = s;
+      _probeSub = s.listen(
+        (event) {
+          if (event == RawSocketEvent.read) _drain(s);
+        },
+        onError: (Object e) => _log.fine('probe socket error: $e'),
+        cancelOnError: false,
+      );
+      return s;
+    } on Object catch (e) {
+      _log.fine('probe socket unavailable: $e');
+      return null;
+    } finally {
+      _probeOpening = null;
+    }
+  }
+
+  @override
   void sendUnicast(List<int> data, InternetAddress address, int port) {
     try {
       _socket?.send(data, address, port);
@@ -269,6 +334,11 @@ class RawMulticastTransport implements MulticastTransport {
     _sub = null;
     _joined.clear();
     _sendIfaces = const [];
+    final probe = _probeSocket;
+    _probeSocket = null;
+    await _probeSub?.cancel();
+    _probeSub = null;
+    probe?.close();
     socket?.close();
   }
 }

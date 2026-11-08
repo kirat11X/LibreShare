@@ -1,0 +1,672 @@
+--- a/packages/libreshare_core/lib/src/engine/libreshare_engine.dart
++++ b/packages/libreshare_core/lib/src/engine/libreshare_engine.dart
+@@ -59,7 +59,11 @@
+ import '../connection/candidate.dart';
+ import '../connection/connection.dart';
+ import '../connection/connection_manager.dart';
++import '../connection/http_connection.dart';
++import '../client/peer_client.dart';
+ import '../monitor/event_log.dart';
++import '../monitor/channel_event.dart';
++import '../model/transfer_status.dart';
+ import '../storage/session_store.dart';
+ import 'discovery_config.dart';
+ import 'outgoing_send.dart';
+@@ -873,19 +877,29 @@
+     Duration probeTimeout = const Duration(milliseconds: 1500),
+     List<Candidate>? candidates,
+     bool enableFallback = true,
+-  }) => _beginSend(
+-    files,
+-    find: (cancel) => _findEndpointWithLadder(
++  }) {
++    // Shared by the lookup (which fills in the ladder) and the sender (which falls back along it).
++    final ladder = _LadderSend(
+       device: device,
+-      probeTimeout: probeTimeout,
+-      cancel: cancel,
+-      candidates: candidates,
+       enableFallback: enableFallback,
+-    ),
+-    pin: pin,
+-    chunkConcurrency: chunkConcurrency,
+-    acceptTimeout: acceptTimeout,
+-  );
++      probeTimeout: probeTimeout,
++    );
++    return _beginSend(
++      files,
++      find: (cancel) => _findEndpointWithLadder(
++        device: device,
++        probeTimeout: probeTimeout,
++        cancel: cancel,
++        candidates: candidates,
++        enableFallback: enableFallback,
++        ladder: ladder,
++      ),
++      pin: pin,
++      chunkConcurrency: chunkConcurrency,
++      acceptTimeout: acceptTimeout,
++      ladder: ladder,
++    );
++  }
+ 
+   OutgoingSend _beginSend(
+     List<File> files, {
+@@ -893,6 +907,7 @@
+     required String? pin,
+     required int? chunkConcurrency,
+     required Duration acceptTimeout,
++    _LadderSend? ladder,
+   }) {
+     // Null means the speed mode decides; an explicit count always wins.
+     final concurrency =
+@@ -909,6 +924,7 @@
+           chunkConcurrency: concurrency,
+           acceptTimeout: acceptTimeout,
+           onEvent: onEvent,
++          nextClient: _fallbackFor(ladder, () => null),
+         ),
+         publish: _emit,
+       );
+@@ -949,6 +965,7 @@
+           security: p.plaintext ? const SecurityConfig.plaintext() : _config,
+           pinnedReceiverFingerprint: p.pin,
+           onAccepted: (fp) => _pinReceiver(p, fp),
++          nextClient: _fallbackFor(ladder, () => plan),
+         );
+       },
+       publish: _emit,
+@@ -1255,6 +1272,7 @@
+     required CancelSignal cancel,
+     List<Candidate>? candidates,
+     bool enableFallback = true,
++    _LadderSend? ladder,
+   }) async {
+     if (cancel.isCancelled) return null;
+     if (device.info.port < 1) return null;
+@@ -1265,6 +1283,11 @@
+     if (list.isEmpty) {
+       return _findEndpoint(device, probeTimeout, cancel);
+     }
++    // The ladder order (the one ConnectionManager uses): a send falls back along it.
++    final sorted = List<Candidate>.of(list)..sort();
++    ladder?.candidates = sorted;
++    // Candidates that refused on their pinned key: never used, reported below.
++    final keyRefused = <Candidate>[];
+     final mgr = ConnectionManager(
+       candidates: list,
+       security: _secure ? _config : const SecurityConfig.plaintext(),
+@@ -1274,36 +1297,49 @@
+           ? device.info.fingerprint
+           : null,
+       enableFallback: enableFallback,
++      connectionFactory: (c, sec) => _PinWatchConnection(
++        HttpConnection(candidate: c, security: sec),
++        keyRefused.add,
++      ),
+     );
+     final sub = mgr.events.listen((e) {
+       _emit(ChannelStateChanged(e));
+     });
++    SendEndpoint? found;
+     try {
+       while (!cancel.isCancelled) {
+         try {
+           if (mgr.activeCandidate == null) {
+-            final connectFuture = mgr.connect(timeout: probeTimeout);
+-            await Future.any([connectFuture, cancel.whenCancelled]);
+-            if (cancel.isCancelled) return null;
++            await Future.any([
++              mgr.connect(timeout: probeTimeout),
++              cancel.whenCancelled,
++            ]);
+           } else {
+-            final fallbackFuture = mgr.fallbackToNext(
+-              reason: 'device_id_mismatch',
+-            );
+-            await Future.any([fallbackFuture, cancel.whenCancelled]);
+-            if (cancel.isCancelled) return null;
++            await Future.any([
++              mgr.fallbackToNext(reason: 'device_id_mismatch'),
++              cancel.whenCancelled,
++            ]);
+           }
+         } on ConnectionException {
+           break;
+         }
++        if (cancel.isCancelled) break;
+         final active = mgr.activeCandidate;
+         if (active == null) break;
+         final answers = await Future.any<bool>([
+           _answersAs(active.host, active.port, device.id, probeTimeout),
+           cancel.whenCancelled.then((_) => false),
+         ]);
+-        if (cancel.isCancelled) return null;
++        if (cancel.isCancelled) break;
+         if (answers) {
+-          return (host: active.host, port: active.port);
++          final at = sorted.indexOf(active);
++          if (at < 0) {
++            ladder?.candidates = const []; // unknown position: no fallback
++          } else {
++            ladder?.index = at;
++          }
++          found = (host: active.host, port: active.port);
++          break;
+         }
+         if (!enableFallback) break;
+       }
+@@ -1313,6 +1349,187 @@
+       await sub.cancel();
+       await mgr.close();
+     }
++    final changed = await _reportKeyChanges(device, keyRefused);
++    if (cancel.isCancelled) return null;
++    if (found != null) return found;
++    if (changed) {
++      // The only candidates that answered presented another key: refused, FAILED.
++      throw EndpointRefusedException(
++        FailureReason.protocolError,
++        'peer presented a key other than the pinned one',
++      );
++    }
++    return null;
++  }
++
++  /// Emits [PeerKeyChanged] for each candidate that refused on its pinned key
++  /// and really presents another key. Returns true when one was reported.
++  Future<bool> _reportKeyChanges(
++    DiscoveredDevice device,
++    List<Candidate> refused,
++  ) async {
++    var changed = false;
++    for (final c in refused) {
++      final pin = c.peerFingerprint.isNotEmpty
++          ? c.peerFingerprint
++          : device.info.fingerprint;
++      if (!_secure || pin.isEmpty) continue;
++      final presented = await _presentedFingerprint(c.host, c.port);
++      if (presented == null || presented.toUpperCase() == pin.toUpperCase()) {
++        continue;
++      }
++      _emit(
++        PeerKeyChanged(
++          deviceId: device.id,
++          pinnedFingerprint: pin,
++          presentedFingerprint: presented,
++        ),
++      );
++      changed = true;
++    }
++    return changed;
++  }
++
++  /// The certificate fingerprint [host]:[port] presents, learnt with one `GET /info` on an
++  /// unpinned connection (the same probe as [_plan]). Null when nothing answers. Used only to
++  /// report a refused key; nothing is sent to the peer with it.
++  Future<String?> _presentedFingerprint(String host, int port) async {
++    final probe = ApiClient(
++      host: host,
++      port: port,
++      security: _config,
++      requestTimeout: const Duration(seconds: 10),
++    );
++    try {
++      await probe.info();
++      return probe.serverFingerprint;
++    } on Object {
++      return null;
++    } finally {
++      probe.close();
++    }
++  }
++
++  /// The FR-13 fallback of a ladder send, or null when there is no ladder to fall back along.
++  Future<PeerClient?> Function(PeerClient failed)? _fallbackFor(
++    _LadderSend? ladder,
++    _SendPlan? Function() planOf,
++  ) {
++    if (ladder == null || !ladder.enableFallback || ladder.candidates.isEmpty) {
++      return null;
++    }
++    return (failed) => _nextLadderClient(ladder, failed, planOf());
++  }
++
++  /// Mid-transfer fallback (FR-13): the next ladder candidate after the failed tier, checked
++  /// exactly like the first contact (same device, same pinned key). Null when none is left.
++  /// Throws [PeerFingerprintMismatchException] (after [PeerKeyChanged]) when a candidate
++  /// presents another key: nothing is sent to it.
++  Future<PeerClient?> _nextLadderClient(
++    _LadderSend ladder,
++    PeerClient failed,
++    _SendPlan? plan,
++  ) async {
++    final from = ladder.index;
++    String? pin;
++    if (_secure) {
++      // The pinned key of the peer, or (first contact) the key the session was accepted with.
++      final seen = failed is SecurePeerClient ? failed.serverFingerprint : null;
++      pin = plan?.pin ?? seen;
++      if (pin == null) return null;
++      if (plan?.pin != null &&
++          seen != null &&
++          plan!.pin!.toUpperCase() != seen.toUpperCase()) {
++        return null;
++      }
++    }
++    for (var i = from + 1; i < ladder.candidates.length; i++) {
++      final c = ladder.candidates[i];
++      final client = await _tierClient(ladder, c, pin);
++      if (client == null) continue;
++      ladder.index = i;
++      final now = DateTime.now().toUtc();
++      final switched = ChannelTierSwitched(
++        fromCandidate: from >= 0 ? ladder.candidates[from] : null,
++        toCandidate: c,
++        reason: 'send_failed',
++        timestamp: now,
++      );
++      _emit(ChannelStateChanged(switched));
++      unawaited(eventLog?.logChannel(switched));
++      final active = ChannelActive(
++        candidate: c,
++        rtt: Duration.zero,
++        timestamp: now,
++      );
++      _emit(ChannelStateChanged(active));
++      unawaited(eventLog?.logChannel(active));
++      return client;
++    }
++    return null;
++  }
++
++  /// A client for [c] that answers as the device of [ladder], or null when it does not answer
++  /// so. Secure profile: [pin] is the key the peer must present; a different one is reported as
++  /// PeerKeyChanged and refused by throwing, and the pinned connection is only made after that.
++  Future<PeerClient?> _tierClient(
++    _LadderSend ladder,
++    Candidate c,
++    String? pin,
++  ) async {
++    final device = ladder.device;
++    final timeout = ladder.probeTimeout;
++    if (!_secure) {
++      final client = ApiClient(
++        host: c.host,
++        port: c.port,
++        connectTimeout: timeout,
++      );
++      try {
++        final info = await client.info().timeout(timeout);
++        if (info.deviceId == device.id) return client;
++      } on Object {
++        // not this device: fall through
++      }
++      client.close();
++      return null;
++    }
++    final expected = pin;
++    if (expected == null) return null;
++    final presented = await _presentedFingerprint(c.host, c.port);
++    if (presented == null) return null;
++    if (presented.toUpperCase() != expected.toUpperCase()) {
++      _emit(
++        PeerKeyChanged(
++          deviceId: device.id,
++          pinnedFingerprint: expected,
++          presentedFingerprint: presented,
++        ),
++      );
++      throw PeerFingerprintMismatchException(
++        shortFp(expected),
++        shortFp(presented),
++      );
++    }
++    final client = ApiClient(
++      host: c.host,
++      port: c.port,
++      security: _config,
++      expectedFingerprint: expected,
++      connectTimeout: timeout,
++    );
++    try {
++      final info = await client.info().timeout(timeout);
++      final seen = client.serverFingerprint;
++      if (info.deviceId == device.id &&
++          seen != null &&
++          seen.toUpperCase() == expected.toUpperCase()) {
++        return client;
++      }
++    } on Object {
++      // refused by the pinned TLS check or not this device
++    }
++    client.close();
+     return null;
+   }
+ 
+@@ -1662,6 +1879,7 @@
+     required this.onAccepted,
+     super.pin,
+     super.onEvent,
++    super.nextClient,
+   });
+ 
+   final Future<void> Function(String fingerprint) onAccepted;
+@@ -1674,3 +1892,56 @@
+     return r;
+   }
+ }
++
++/// The candidate ladder of one send (Increment 4, FR-13): the candidates in ladder order and the
++/// tier in use. The lookup fills it in; the sender falls back along it.
++class _LadderSend {
++  _LadderSend({
++    required this.device,
++    required this.enableFallback,
++    required this.probeTimeout,
++  });
++
++  final DiscoveredDevice device;
++  final bool enableFallback;
++  final Duration probeTimeout;
++
++  /// Ladder order; empty when the send did not go through the ladder.
++  List<Candidate> candidates = const [];
++
++  /// Index into [candidates] of the tier in use, -1 before one was chosen.
++  int index = -1;
++}
++
++/// A ladder connection that reports the candidates which refused on their pinned key.
++class _PinWatchConnection implements Connection {
++  _PinWatchConnection(this._inner, this._onKeyRefused);
++
++  final Connection _inner;
++  final void Function(Candidate) _onKeyRefused;
++
++  @override
++  Candidate get candidate => _inner.candidate;
++
++  @override
++  ConnectionState get state => _inner.state;
++
++  @override
++  bool get isHealthy => _inner.isHealthy;
++
++  @override
++  Duration? get latency => _inner.latency;
++
++  @override
++  Future<PeerClient> open({Duration? timeout}) async {
++    try {
++      return await _inner.open(timeout: timeout);
++    } on FingerprintMismatchException {
++      _onKeyRefused(_inner.candidate);
++      rethrow;
++    }
++  }
++
++  @override
++  Future<void> close() => _inner.close();
++}
+--- a/packages/libreshare_core/lib/src/engine/outgoing_send.dart
++++ b/packages/libreshare_core/lib/src/engine/outgoing_send.dart
+@@ -40,6 +40,19 @@
+ /// promptly once [cancel] is cancelled.
+ typedef FindEndpoint = Future<SendEndpoint?> Function(CancelSignal cancel);
+ 
++/// Thrown by a [FindEndpoint] that refused every candidate on a security ground (a candidate
++/// presented another key than the pinned one, and was never sent to). The send then ends with
++/// a [SendResult] that carries [reason] instead of throwing.
++class EndpointRefusedException implements Exception {
++  const EndpointRefusedException(this.reason, this.cause);
++
++  final FailureReason reason;
++  final Object cause;
++
++  @override
++  String toString() => 'EndpointRefusedException(${reason.wire})';
++}
++
+ /// One outgoing send in flight.
+ ///
+ /// * [events]: this send's own events, in order: `SessionCreated(outgoing)`
+@@ -145,6 +158,8 @@
+       } finally {
+         client.close();
+       }
++    } on EndpointRefusedException catch (e) {
++      return _ended(sw, e.reason);
+     } finally {
+       _finished = true;
+       unawaited(_events.close());
+--- a/packages/libreshare_core/lib/src/transfer/file_sender.dart
++++ b/packages/libreshare_core/lib/src/transfer/file_sender.dart
+@@ -73,7 +73,7 @@
+ 
+ class FileSender {
+   FileSender({
+-    required this.client,
++    required PeerClient client,
+     required this.self,
+     this.chunker = const Chunker(),
+     this.chunkConcurrency = 3,
+@@ -89,7 +89,9 @@
+     this.hashLimitBytes = kManifestHashLimit,
+     this.security = const SecurityConfig.plaintext(),
+     this.pinnedReceiverFingerprint,
++    this.nextClient,
+   }) {
++    _client = client;
+     final pinned = pinnedReceiverFingerprint;
+     if (pinned != null && !RegExp(r'^[0-9A-Fa-f]{64}$').hasMatch(pinned)) {
+       // A malformed pin must never mean "first contact".
+@@ -114,7 +116,22 @@
+     }
+   }
+ 
+-  final PeerClient client;
++  late PeerClient _client;
++
++  /// The client of the tier the send currently uses.
++  PeerClient get client => _client;
++
++  /// FR-13 fallback: called once the bounded retries of a transient failure
++  /// on the current tier are spent. Returns the client of the next ladder
++  /// candidate (the sender then resyncs with `/state` and sends only the
++  /// missing chunks), or null when none is left (the send ends
++  /// FAILED(NO_CONNECTION)). It may throw a security refusal (the candidate
++  /// presented another key): the send then fails with that error, as on first
++  /// contact, and nothing is sent to that candidate.
++  final Future<PeerClient?> Function(PeerClient failed)? nextClient;
++
++  /// The fallback in progress, shared by every task that failed on the same tier.
++  Future<void>? _switching;
+   final DeviceInfo self;
+   final Chunker chunker;
+ 
+@@ -257,7 +274,7 @@
+       run.sasOutstanding = sas.ns != null;
+     }
+     // Not retried: a blind retry could make the receiver prompt twice.
+-    var st = await client.createSession(request);
++    var st = await _client.createSession(request);
+     run.sessionId = st.sessionId;
+     _emit(SessionCreated(run.sessionId, outgoing: true));
+     run.throwIfAborted();
+@@ -288,7 +305,11 @@
+       (e) => _sendFile(run, e, accepted[e.item.fileId]!),
+     );
+ 
+-    final fin = await _retry(run, () => client.finish(run.sessionId));
++    final fin = await _retry(
++      run,
++      () => _client.finish(run.sessionId),
++      switchTier: true,
++    );
+     switch (fin.status) {
+       case TransferStatus.completed:
+         return;
+@@ -312,13 +333,13 @@
+   /// Learns and checks the receiver (LSP-1 4.7, 5.1) before any session exists. Returns null for
+   /// a legacy receiver the user explicitly allowed (plaintext behaviour from then on).
+   Future<_SecureSend?> _prepareSecure(_SendRun run) async {
+-    final peer = await client.info();
++    final peer = await _client.info();
+     run.throwIfAborted();
+     if (peer.fingerprint.isEmpty) {
+       if (security.allowInsecurePeers) return null;
+       throw const InsecurePeerException();
+     }
+-    final c = client;
++    final c = _client;
+     final seen = c is SecurePeerClient ? c.serverFingerprint : null;
+     if (seen == null) throw const InsecurePeerException();
+     final receiverFp = seen.toUpperCase();
+@@ -388,7 +409,7 @@
+         notifyPeer: true,
+       );
+     }
+-    final c = client;
++    final c = _client;
+     if (c is! SecurePeerClient) throw const InsecurePeerException();
+     final SessionStatus revealed;
+     try {
+@@ -442,7 +463,7 @@
+       final hardCap = Duration(seconds: waitSeconds + 10);
+       final poll = Stopwatch()..start();
+       try {
+-        st = await client
++        st = await _client
+             .waitSession(run.sessionId, waitSeconds: waitSeconds)
+             .timeout(guard < hardCap ? guard : hardCap);
+         transient = 0;
+@@ -506,7 +527,8 @@
+     for (var round = 0; ; round++) {
+       final state = await _retry(
+         run,
+-        () => client.fileState(sid, item.fileId, token: token),
++        () => _client.fileState(sid, item.fileId, token: token),
++        switchTier: true,
+       );
+       if (state.chunkCount != item.chunkCount) {
+         throw _SendFailure(
+@@ -549,13 +571,14 @@
+       try {
+         final v = await _retry(
+           run,
+-          () => client.completeFile(
++          () => _client.completeFile(
+             sid,
+             item.fileId,
+             token: token,
+             sha256: suppliedSha,
+           ),
+           retryIf: (e) => _isTransient(e) && !_isMissingChunks(e),
++          switchTier: true,
+         );
+         if (!v.verified) {
+           throw _SendFailure(
+@@ -615,7 +638,7 @@
+       if (attempted) {
+         // A previous attempt failed or its ack was lost: ask the receiver
+         // before re-sending, so an acknowledged chunk is never PUT again.
+-        final state = await client.fileState(
++        final state = await _client.fileState(
+           run.sessionId,
+           item.fileId,
+           token: token,
+@@ -628,7 +651,7 @@
+         }
+       }
+       attempted = true;
+-      await client.putChunk(
++      await _client.putChunk(
+         run.sessionId,
+         item.fileId,
+         index,
+@@ -637,7 +660,7 @@
+         chunkSha256: hash,
+         token: token,
+       );
+-    });
++    }, switchTier: true);
+     run.bytesSent += r.length;
+     progress.done += r.length;
+     _emit(
+@@ -675,29 +698,57 @@
+   }
+ 
+   /// Retries [op] on transient errors with [retryDelays] (spec §4.4: 3 retries
+-  /// at 0.5/1/2 s).
++  /// at 0.5/1/2 s). With [switchTier], once those retries are spent on the
++  /// current tier the send moves to the next one ([nextClient]) and [op] gets
++  /// its own retry budget there.
+   Future<T> _retry<T>(
+     _SendRun run,
+     Future<T> Function() op, {
+     bool Function(Object error)? retryIf,
++    bool switchTier = false,
+   }) async {
+     final shouldRetry = retryIf ?? _isTransient;
+-    for (var attempt = 0; ; attempt++) {
++    var attempt = 0;
++    while (true) {
+       run.throwIfAborted();
++      final used = _client;
+       try {
+         return await op();
+       } on Object catch (e) {
+-        if (attempt >= retryDelays.length || run.aborted || !shouldRetry(e)) {
+-          rethrow;
++        if (run.aborted || !shouldRetry(e)) rethrow;
++        if (attempt < retryDelays.length) {
++          _log.fine(
++            'transient ${e.runtimeType}, retry ${attempt + 1}/${retryDelays.length}',
++          );
++          await Future<void>.delayed(retryDelays[attempt]);
++          attempt++;
++          continue;
+         }
+-        _log.fine(
+-          'transient ${e.runtimeType}, retry ${attempt + 1}/${retryDelays.length}',
+-        );
+-        await Future<void>.delayed(retryDelays[attempt]);
++        if (!switchTier || nextClient == null || !_isTransient(e)) rethrow;
++        await _switchFrom(used);
++        attempt = 0;
+       }
+     }
+   }
+ 
++  /// Moves the send from the tier [failed] to the next candidate. A no-op when
++  /// another task already moved on from [failed].
++  Future<void> _switchFrom(PeerClient failed) {
++    if (!identical(failed, _client)) return Future<void>.value();
++    return _switching ??= _moveOn(failed).whenComplete(() => _switching = null);
++  }
++
++  Future<void> _moveOn(PeerClient failed) async {
++    final next = await nextClient!(failed);
++    if (next == null) {
++      throw _SendFailure(
++        FailureReason.noConnection,
++        'every ladder candidate failed mid-transfer',
++      );
++    }
++    _client = next;
++  }
++
+   static bool _isTransient(Object e) =>
+       e is SocketException ||
+       e is TimeoutException ||
+@@ -820,7 +871,7 @@
+ 
+   Future<void> _sendCancel(String sessionId) async {
+     try {
+-      await client.cancel(sessionId).timeout(const Duration(seconds: 5));
++      await _client.cancel(sessionId).timeout(const Duration(seconds: 5));
+     } on Object catch (e) {
+       _log.fine('cancel request failed: ${e.runtimeType}');
+     }

@@ -51,6 +51,7 @@ const Map<String, String> kStringsEn = {
   'source.manual': 'Added manually',
   'source.qr': 'Added from a link or QR code',
   'source.register': 'Introduced itself',
+  'source.ble': 'Found nearby via Bluetooth',
   'platform.linux': 'Linux',
   'platform.windows': 'Windows',
   'platform.android': 'Android',
@@ -146,6 +147,8 @@ const Map<String, String> kStringsEn = {
   'failure.noConnection': 'Could not reach {peer}. Check that you are on the same network and that Receive is on.',
   'failure.lost': 'The connection to {peer} was lost. Keep both apps open and on the same Wi-Fi, then try again.',
   'failure.diskFull': 'There is not enough free space on the receiving device.',
+  'failure.storageUnusable': 'The download folder on the receiving device is not usable or unwritable.',
+  'settings.folderUnwritable': 'The selected folder cannot be written to. Please choose another location.',
   'failure.protocol': 'Something went wrong during the transfer.',
   'failure.localFile':
       'A selected file could not be read. It may have been moved or deleted.',
@@ -245,6 +248,15 @@ const Map<String, String> kStringsEn = {
   'settings.portLabel': 'Preferred port',
   'settings.portInvalid': 'Enter a port from 1024 to 65535.',
   'settings.busy': 'Finish the current transfers first. This change restarts the connection.',
+  'settings.speed': 'Transfer speed',
+  'settings.speedEco': 'Eco',
+  'settings.speedBalanced': 'Balanced',
+  'settings.speedTurbo': 'Turbo',
+  'settings.speedEcoHelp':
+      'One chunk at a time. Gentlest on battery and old computers.',
+  'settings.speedBalancedHelp': 'Three chunks at a time. The default.',
+  'settings.speedTurboHelp':
+      'Eight chunks at a time. Fastest on SSDs and fast links.',
   'settings.help': 'Help',
   'help.title': "Can't see devices?",
   'help.body': 'Both devices need to be on the same network, and the other one needs Receive turned on. Guest, hotel and campus Wi-Fi often isolates devices; in that case add the device by IP address or QR code, or use a phone hotspot. A firewall can also block LibreShare: on Linux, run one of the commands below once.',

@@ -1,0 +1,162 @@
+--- /dev/null	2026-11-07 14:59:32.635351164 +0530
++++ b/packages/libreshare_core/lib/src/tunnel/tunnel_provider.dart	2026-11-07 19:17:44.822753077 +0530
+@@ -0,0 +1,68 @@
++import 'dart:async';
++
++/// Abstract interface for a tunnel or reverse proxy provider that exposes
++/// a local HTTP origin to an external public address.
++abstract interface class TunnelProvider {
++  /// Unique provider identifier ('cloudflare-quick', 'zrok', 'manual-url', 'fake').
++  String get id;
++
++  /// Returns true if the provider is operational and available on this machine
++  /// (e.g. pinned helper binary is installed or token is set).
++  Future<bool> isAvailable();
++
++  /// Starts or opens a tunnel to [localPort] on loopback.
++  /// Throws if the tunnel cannot be established within [ready].
++  Future<TunnelHandle> open(
++    int localPort, {
++    Duration ready = const Duration(seconds: 45),
++  });
++}
++
++/// Active handle to an open tunnel connection.
++abstract interface class TunnelHandle {
++  /// The public base URI (e.g. `https://random-subdomain.trycloudflare.com`).
++  /// Never contains path or secret tokens.
++  Uri get publicBase;
++
++  /// Stream of operational and lifecycle events for this tunnel.
++  Stream<TunnelEvent> get events;
++
++  /// Gracefully tears down and terminates the tunnel.
++  Future<void> close();
++}
++
++/// Events emitted during the lifecycle of a tunnel.
++sealed class TunnelEvent {
++  const TunnelEvent();
++}
++
++/// The tunnel is connected and actively forwarding requests.
++final class TunnelUpEvent extends TunnelEvent {
++  const TunnelUpEvent();
++  @override
++  String toString() => 'TunnelUpEvent()';
++}
++
++/// The tunnel connection was lost or terminated.
++final class TunnelLostEvent extends TunnelEvent {
++  final String reason;
++  const TunnelLostEvent(this.reason);
++  @override
++  String toString() => 'TunnelLostEvent($reason)';
++}
++
++/// The tunnel provider indicated rate limiting (e.g. HTTP 429 / 1015).
++final class TunnelRateLimitedEvent extends TunnelEvent {
++  final Duration? retryAfter;
++  const TunnelRateLimitedEvent([this.retryAfter]);
++  @override
++  String toString() => 'TunnelRateLimitedEvent(retryAfter: $retryAfter)';
++}
++
++/// Scrubbed diagnostic log output from the tunnel supervisor.
++final class TunnelLogEvent extends TunnelEvent {
++  final String line;
++  const TunnelLogEvent(this.line);
++  @override
++  String toString() => 'TunnelLogEvent($line)';
++}
+--- /dev/null	2026-11-07 14:59:32.635351164 +0530
++++ b/packages/libreshare_core/lib/src/model/origin_candidate.dart	2026-11-07 19:17:44.820753083 +0530
+@@ -0,0 +1,29 @@
++enum OriginKind { tunnel, ipv6, ipv4Mapped, manual }
++
++final class OriginCandidate {
++  final OriginKind kind;
++  final Uri base;
++  final String? tlsPinHex;
++
++  const OriginCandidate({
++    required this.kind,
++    required this.base,
++    this.tlsPinHex,
++  });
++
++  @override
++  bool operator ==(Object other) =>
++      identical(this, other) ||
++      other is OriginCandidate &&
++          runtimeType == other.runtimeType &&
++          kind == other.kind &&
++          base == other.base &&
++          tlsPinHex == other.tlsPinHex;
++
++  @override
++  int get hashCode => Object.hash(kind, base, tlsPinHex);
++
++  @override
++  String toString() =>
++      'OriginCandidate(kind: $kind, base: $base, tlsPinHex: ${tlsPinHex != null ? "[pinned]" : "null"})';
++}
+--- /dev/null	2026-11-07 14:59:32.635351164 +0530
++++ b/packages/libreshare_core/lib/src/model/share_models.dart	2026-11-07 19:17:44.821753080 +0530
+@@ -0,0 +1,56 @@
++enum ShareMode {
++  oneTime(1),
++  multiReceiver(2),
++  anyone(0);
++
++  const ShareMode(this.wireValue);
++  final int wireValue;
++}
++
++final class ShareRecord {
++  final String shareId;
++  final String token;
++  final int maxReceivers;
++  final int createdAtUnixSeconds;
++  final int? expiresAtUnixSeconds;
++  final int totalBytes;
++  final List<String> fileNames;
++
++  const ShareRecord({
++    required this.shareId,
++    required this.token,
++    required this.maxReceivers,
++    required this.createdAtUnixSeconds,
++    this.expiresAtUnixSeconds,
++    required this.totalBytes,
++    required this.fileNames,
++  });
++
++  Map<String, dynamic> toJson() => {
++    'shareId': shareId,
++    'token': token,
++    'maxReceivers': maxReceivers,
++    'createdAt': createdAtUnixSeconds,
++    if (expiresAtUnixSeconds != null) 'expiresAt': expiresAtUnixSeconds,
++    'totalBytes': totalBytes,
++    'files': fileNames,
++  };
++
++  factory ShareRecord.fromJson(Map<String, dynamic> json) {
++    return ShareRecord(
++      shareId: json['shareId'] as String,
++      token: json['token'] as String,
++      maxReceivers: (json['maxReceivers'] as num?)?.toInt() ?? 1,
++      createdAtUnixSeconds: (json['createdAt'] as num).toInt(),
++      expiresAtUnixSeconds: (json['expiresAt'] as num?)?.toInt(),
++      totalBytes: (json['totalBytes'] as num).toInt(),
++      fileNames: (json['files'] as List<dynamic>)
++          .map((e) => e.toString())
++          .toList(),
++    );
++  }
++
++  @override
++  String toString() =>
++      'ShareRecord(shareId: $shareId, token: [redacted], files: ${fileNames.length})';
++}

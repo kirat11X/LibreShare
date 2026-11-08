@@ -17,21 +17,39 @@ class PortBlocker {
       : DynamicLibrary.process();
 
   static final int Function(int, int, int) _socket = _lib
-      .lookupFunction<Int32 Function(Int32, Int32, Int32), int Function(int, int, int)>('socket');
+      .lookupFunction<
+        Int32 Function(Int32, Int32, Int32),
+        int Function(int, int, int)
+      >('socket');
 
   static final int Function(int, Pointer<Void>, int) _bind = _lib
-      .lookupFunction<Int32 Function(Int32, Pointer<Void>, Uint32), int Function(int, Pointer<Void>, int)>('bind');
+      .lookupFunction<
+        Int32 Function(Int32, Pointer<Void>, Uint32),
+        int Function(int, Pointer<Void>, int)
+      >('bind');
 
   static final int Function(int) _close = Platform.isWindows
-      ? _lib.lookupFunction<Int32 Function(Int32), int Function(int)>('closesocket')
+      ? _lib.lookupFunction<Int32 Function(Int32), int Function(int)>(
+          'closesocket',
+        )
       : _lib.lookupFunction<Int32 Function(Int32), int Function(int)>('close');
 
-  static final _malloc = _lib.lookupFunction<Pointer<Void> Function(IntPtr), Pointer<Void> Function(int)>('malloc');
-  static final _free = _lib.lookupFunction<Void Function(Pointer<Void>), void Function(Pointer<Void>)>('free');
+  static final _malloc = _lib
+      .lookupFunction<
+        Pointer<Void> Function(IntPtr),
+        Pointer<Void> Function(int)
+      >('malloc');
+  static final _free = _lib
+      .lookupFunction<
+        Void Function(Pointer<Void>),
+        void Function(Pointer<Void>)
+      >('free');
 
   static PortBlocker bind(int port, {String address = '127.0.0.1'}) {
     final fd = _socket(2 /* AF_INET */, 1 /* SOCK_STREAM */, 0);
-    if (fd < 0) throw SocketException('Failed to create native socket for PortBlocker');
+    if (fd < 0) {
+      throw SocketException('Failed to create native socket for PortBlocker');
+    }
 
     final p = _malloc(16).cast<Uint8>();
     try {

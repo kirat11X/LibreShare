@@ -84,6 +84,17 @@ class SettingsNotifier extends Notifier<AppSettings> {
     await _save();
   }
 
+  /// Sets the transfer speed of sends from this device. Running sends keep
+  /// their mode; the engine follows the new one for the next send. The mode
+  /// is stored first, so a state change means it is on disk.
+  Future<void> setSpeedMode(SpeedMode mode) async {
+    if (mode == state.speedMode) return;
+    await ref
+        .read(appSettingsStoreProvider)
+        .save(state.copyWith(speedMode: mode));
+    state = state.copyWith(speedMode: mode);
+  }
+
   Future<void> _save() => ref.read(appSettingsStoreProvider).save(state);
 }
 

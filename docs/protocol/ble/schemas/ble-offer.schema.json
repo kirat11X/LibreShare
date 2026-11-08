@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://libreshare.org/schemas/ble-offer.schema.json",
+  "title": "BleOffer",
+  "description": "LS-BLE/1 Encrypted file transfer offer over GATT.",
+  "type": "object",
+  "required": ["type", "offerId", "fileCount", "totalSize", "firstName", "lanCands", "hostPref"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "offer"
+    },
+    "offerId": {
+      "type": "string",
+      "description": "Base64-encoded 16-byte random offer identifier."
+    },
+    "fileCount": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "totalSize": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "firstName": {
+      "type": "string"
+    },
+    "lanCands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["ip", "port"],
+        "properties": {
+          "ip": { "type": "string" },
+          "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+          "iface": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "hostPref": {
+      "type": "integer"
+    }
+  },
+  "additionalProperties": false
+}

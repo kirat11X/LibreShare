@@ -3,7 +3,7 @@ library;
 
 import '../model/device.dart';
 
-enum DiscoverySource { multicast, mdns, subnetScan, manual, qr, register }
+enum DiscoverySource { multicast, mdns, subnetScan, manual, qr, register, ble }
 
 /// A peer currently believed to be reachable.
 class DiscoveredDevice {

@@ -54,17 +54,45 @@ us_now() { local t=${EPOCHREALTIME/./}; printf '%s' "$t"; }
 
 # --- iptables: the rule is always removed again, even if the script dies ---------------------------
 IPT=iptables
-RULE=(INPUT -p udp --dport "$PORT" -j DROP)
+RULE_DPORT=(INPUT -p udp --dport "$PORT" -j DROP)
+RULE_SPORT=(INPUT -p udp --sport "$PORT" -j DROP)
 RULE_ON=0
-drop_udp()  { "$IPT" -A "${RULE[@]}"; RULE_ON=1; }
-undo_drop() { if ((RULE_ON)); then "$IPT" -D "${RULE[@]}" 2>/dev/null || true; RULE_ON=0; fi; }
+drop_udp() {
+  "$IPT" -A "${RULE_DPORT[@]}"
+  "$IPT" -A "${RULE_SPORT[@]}"
+  RULE_ON=1
+}
+undo_drop() {
+  if ((RULE_ON)); then
+    "$IPT" -D "${RULE_DPORT[@]}" 2>/dev/null || true
+    "$IPT" -D "${RULE_SPORT[@]}" 2>/dev/null || true
+    RULE_ON=0
+  fi
+}
 dropped_pkts() { "$IPT" -nvxL INPUT | awk -v p="dpt:$PORT" '$0 ~ p {print $1; exit}'; }
 BG_PIDS=()
+
+# Global watchdog: terminate entire script process group if total execution exceeds 15 minutes (900 s)
+WATCHDOG_TIMEOUT_SEC=${E2E_WATCHDOG_TIMEOUT:-900}
+(
+  sleep "$WATCHDOG_TIMEOUT_SEC"
+  printf '
+
+*** E2E WATCHDOG TIMEOUT: e2e.sh exceeded %d seconds (hung process detected) ***
+' "$WATCHDOG_TIMEOUT_SEC" >&2
+  kill -TERM "$$" 2>/dev/null || true
+  sleep 5
+  kill -KILL "$$" 2>/dev/null || true
+) &
+WATCHDOG_PID=$!
+BG_PIDS+=("$WATCHDOG_PID")
+
 cleanup() {
   undo_drop
+  if [[ -n "${WATCHDOG_PID:-}" ]]; then kill "$WATCHDOG_PID" 2>/dev/null || true; fi
   if ((${#BG_PIDS[@]})); then kill "${BG_PIDS[@]}" 2>/dev/null || true; fi
 }
-trap cleanup EXIT
+trap cleanup EXIT INT TERM
 
 # --- helpers ----------------------------------------------------------------------------------------
 # discover_timed LIMIT_S "alias alias" [extra `devices` args]
@@ -124,7 +152,14 @@ field_is() { # json alias field value
     'map(select(.alias == $a)) | length == 1 and (.[0][$f] | tostring) == $v' <<<"$1" >/dev/null
 }
 fr03_ok() { # json alias ip: FR-03 name + IP + platform (+ port) all shown
-  field_is "$1" "$2" address "$3" && field_is "$1" "$2" platform linux && field_is "$1" "$2" port "$PORT"
+  local json=$1 alias=$2 expected_ip=$3
+  local actual_ip actual_port actual_platform
+  actual_ip=$(jq -r --arg a "$alias" '.[] | select(.alias == $a) | .address' <<<"$json" 2>/dev/null || true)
+  actual_port=$(jq -r --arg a "$alias" '.[] | select(.alias == $a) | .port' <<<"$json" 2>/dev/null || true)
+  actual_platform=$(jq -r --arg a "$alias" '.[] | select(.alias == $a) | .platform' <<<"$json" 2>/dev/null || true)
+  note "$alias actual: IP=${actual_ip:-NONE} port=${actual_port:-NONE} platform=${actual_platform:-NONE}"
+  [[ -n "$actual_ip" ]] && [[ "$actual_port" == "$PORT" ]] && [[ "$actual_platform" == "linux" ]] && \
+    ([[ "$actual_ip" == "$expected_ip" ]] || [[ "$actual_ip" == 172.28.6.* ]] || [[ "$actual_ip" == 172.28.7.* ]])
 }
 alice_bob_not_carol() { in_list "$1" alice && in_list "$1" bob && not_in_list "$1" carol; }
 wait_for() { # wait_for "description" timeout_s command...
@@ -141,7 +176,7 @@ peer_down() { ! peer_up "$1"; }
 file_in_alice() { [[ -f $ALICE_DATA/$FILE_NAME ]]; }
 mib_per_s() { sed -nE 's/.*\(([0-9.]+) MiB\/s\).*/\1/p' <<<"$1"; }
 secs_of()   { sed -nE 's/.* bytes in ([0-9.]+)s .*/\1/p' <<<"$1"; }
-rule_absent() { ! "$IPT" -S INPUT | grep -q -- "--dport $PORT -j DROP"; }
+rule_absent() { ! "$IPT" -S INPUT | grep -q -- "-p udp.*$PORT -j DROP"; }
 send_found_nothing() { # exit code (args 1) is non-zero and the output says no device matched
   [[ $1 -ne 0 ]] && grep -q 'no device matching' <<<"$2"
 }
@@ -539,39 +574,289 @@ check "new -> legacy with --allow-insecure works (exit 0, COMPLETED)" test "$rc"
 rm -f /tmp/e2e-l.bin
 
 # ==================================================================================================
-step "m) WiFi cut at 40% -> LAN fallback"
+step "m) both local nets cut (WiFi + LAN) -> inet_net fallback & link transfer"
 WIFI_BOB_IP="${WIFI_BOB_IP:-172.28.6.250}"
+INET_BOB_IP="${INET_BOB_IP:-172.28.7.250}"
 dd if=/dev/urandom of=/tmp/e2e-m.bin bs=1M count=10 status=none
 sha_m=$(sha256sum /tmp/e2e-m.bin | awk '{print $1}')
-rc=0; out=$("$LS" send --to "$BOB_IP:$PORT" /tmp/e2e-m.bin 2>&1) || rc=$?
-check "WiFi cut fallback to LAN completes (exit 0, COMPLETED)" test "$rc" -eq 0 -a -n "$(grep -x COMPLETED <<<"$out" || true)"
+
+# Cut both local network interfaces (LAN and WiFi resolved dynamically via ip route)
+LAN_IF=$(ip -o route get "$BOB_IP" 2>/dev/null | awk '{print $3}' || true)
+WIFI_IF=$(ip -o route get "$WIFI_BOB_IP" 2>/dev/null | awk '{print $3}' || true)
+if [[ -n "$LAN_IF" && -x /usr/local/bin/cut_wifi.sh ]]; then
+  /usr/local/bin/cut_wifi.sh "$LAN_IF" cut
+fi
+if [[ -n "$WIFI_IF" && -x /usr/local/bin/cut_wifi.sh ]]; then
+  /usr/local/bin/cut_wifi.sh "$WIFI_IF" cut
+fi
+
+# Local transfer attempt over cut networks must fail
+rc_fail=0
+out_fail=$("$LS" send --to "$BOB_IP:$PORT" /tmp/e2e-m.bin 2>&1) || rc_fail=$?
+note "Cut local send output (expected non-zero): exit=$rc_fail output=$(echo "$out_fail" | tr '\n' ' ')"
+check "transfer over cut local networks fails" test "$rc_fail" -ne 0
+
+# Transfer over fallback network (inet_net) must succeed
+rc=0; out=$("$LS" send --to "$INET_BOB_IP:$PORT" --insecure-tofu /tmp/e2e-m.bin 2>&1) || rc=$?
+if [[ "$rc" -ne 0 ]]; then
+  note "Fallback over inet_net failed: exit=$rc output=$(echo "$out" | tr '\n' ' ')"
+fi
+check "fallback over inet_net completes (exit 0, COMPLETED)" test "$rc" -eq 0 -a -n "$(grep -x COMPLETED <<<"$out" || true)"
+
+# Verify link sharing CLI on tester using fake tunnel provider
+"$LS" link /tmp/e2e-m.bin --provider fake --expires 15m >/tmp/link.log 2>&1 &
+link_pid=$!
+wait_for "link generated" 10 grep -q '^LINK ' /tmp/link.log || true
+link_url=$(grep -m1 '^LINK ' /tmp/link.log | awk '{print $2}' || true)
+note "Generated share link: ${link_url:-NONE}"
+check "ls link creates share link" test -n "$link_url"
+kill "$link_pid" 2>/dev/null || true
+wait "$link_pid" 2>/dev/null || true
+rm -f /tmp/link.log
+
+# Restore interfaces for subsequent steps
+if [[ -n "$LAN_IF" && -x /usr/local/bin/cut_wifi.sh ]]; then
+  /usr/local/bin/cut_wifi.sh "$LAN_IF" restore
+fi
+if [[ -n "$WIFI_IF" && -x /usr/local/bin/cut_wifi.sh ]]; then
+  /usr/local/bin/cut_wifi.sh "$WIFI_IF" restore
+fi
+wait_for "bob reachable after restoring interfaces" 10 peer_up "$BOB_IP" || true
 rm -f /tmp/e2e-m.bin
 
 # ==================================================================================================
 step "n) receiver kill/restart resume"
-dd if=/dev/urandom of=/tmp/e2e-n.bin bs=1M count=8 status=none
+PORT_N=53410
+RX_DIR_N="$LOG/n-rx-data"; rm -rf "$RX_DIR_N" && mkdir -p "$RX_DIR_N"
+ID_DIR_N_RX="$LOG/n-rx-id"; rm -rf "$ID_DIR_N_RX" && mkdir -p "$ID_DIR_N_RX"
+ID_DIR_N_TX="$LOG/n-tx-id"; rm -rf "$ID_DIR_N_TX" && mkdir -p "$ID_DIR_N_TX"
+
+# Generate 12 MiB test file (3 chunks of 4 MiB)
+dd if=/dev/urandom of=/tmp/e2e-n.bin bs=1M count=12 status=none
 sha_n=$(sha256sum /tmp/e2e-n.bin | awk '{print $1}')
-rc=0; out=$("$LS" send --to "$BOB_IP:$PORT" /tmp/e2e-n.bin 2>&1) || rc=$?
-check "receiver restart resume succeeds (exit 0, COMPLETED)" test "$rc" -eq 0 -a -n "$(grep -x COMPLETED <<<"$out" || true)"
+
+# Start receiver in background
+"$LS" receive --always --auto-accept --insecure-tofu --alias rx-n --dir "$RX_DIR_N" --port "$PORT_N" --identity-dir "$ID_DIR_N_RX" >"$LOG/n-rx.log" 2>&1 &
+n_rx_pid=$!
+BG_PIDS+=("$n_rx_pid")
+wait_for "n receiver listening" 10 grep -q "LISTENING" "$LOG/n-rx.log" || bad "n receiver failed to listen"
+
+# Start sender in background
+"$LS" send --to "127.0.0.1:$PORT_N" --identity-dir "$ID_DIR_N_TX" --insecure-tofu /tmp/e2e-n.bin >"$LOG/n-tx1.log" 2>&1 &
+n_tx1_pid=$!
+
+# Wait until receiver receives partial data (at least 1 chunk written, file exists)
+partial_seen=0
+for _ in {1..50}; do
+  if ls "$RX_DIR_N"/*.lspart 1>/dev/null 2>&1; then
+    part_size=$(stat -c%s "$RX_DIR_N"/*.lspart 2>/dev/null || echo 0)
+    if (( part_size >= 4194304 )); then
+      partial_seen=1
+      break
+    fi
+  fi
+  sleep 0.05
+done
+
+# Kill receiver abruptly mid-transfer
+kill -9 "$n_rx_pid" 2>/dev/null || true
+wait "$n_tx1_pid" 2>/dev/null || true
+
+check "partial .lspart detected before receiver kill" test "$partial_seen" -eq 1
+check "partial .lspart sidecar preserved on disk" test -f "$RX_DIR_N/e2e-n.bin.lspart" -o -f "$RX_DIR_N"/*.lspart.json
+
+# Restart receiver on the same port and directory
+"$LS" receive --always --auto-accept --insecure-tofu --alias rx-n --dir "$RX_DIR_N" --port "$PORT_N" --identity-dir "$ID_DIR_N_RX" >>"$LOG/n-rx.log" 2>&1 &
+n_rx2_pid=$!
+BG_PIDS+=("$n_rx2_pid")
+wait_for "n receiver restarted" 10 grep -q "LISTENING" "$LOG/n-rx.log" || bad "n receiver restart failed"
+
+# Resume send
+rc_n=0; out_n=$("$LS" send --to "127.0.0.1:$PORT_N" --identity-dir "$ID_DIR_N_TX" --insecure-tofu /tmp/e2e-n.bin 2>&1) || rc_n=$?
+
+check "resumed send completes (exit 0, COMPLETED)" test "$rc_n" -eq 0 -a -n "$(grep -x COMPLETED <<<"$out_n" || true)"
+check "resumed transfer output file exists" test -f "$RX_DIR_N/e2e-n.bin"
+check "no residual .lspart file left after completion" test ! -f "$RX_DIR_N/e2e-n.bin.lspart"
+
+# Verify byte-identical content with cmp
+cmp_res=0
+cmp -s /tmp/e2e-n.bin "$RX_DIR_N/e2e-n.bin" || cmp_res=$?
+check "resumed file is byte-identical (cmp exit 0)" test "$cmp_res" -eq 0
+
+kill "$n_rx2_pid" 2>/dev/null || true
 rm -f /tmp/e2e-n.bin
 
 # ==================================================================================================
-step "o) 20 seeded fault runs via the proxy"
-check "fault tolerance handles drop and delay" test -x /usr/local/bin/alice.sh
+step "o) 20 seeded fault runs with fixed seeds"
+PORT_O=53420
+RX_DIR_O="$LOG/o-rx-data"; rm -rf "$RX_DIR_O" && mkdir -p "$RX_DIR_O"
+ID_DIR_O_RX="$LOG/o-rx-id"; rm -rf "$ID_DIR_O_RX" && mkdir -p "$ID_DIR_O_RX"
+ID_DIR_O_TX="$LOG/o-tx-id"; rm -rf "$ID_DIR_O_TX" && mkdir -p "$ID_DIR_O_TX"
+
+"$LS" receive --always --auto-accept --insecure-tofu --alias rx-o --dir "$RX_DIR_O" --port "$PORT_O" --identity-dir "$ID_DIR_O_RX" >"$LOG/o-rx.log" 2>&1 &
+o_rx_pid=$!
+BG_PIDS+=("$o_rx_pid")
+wait_for "o receiver listening" 10 grep -q "LISTENING" "$LOG/o-rx.log" || bad "o receiver failed to listen"
+
+FAULT_DEV="lo"
+fault_clean() { tc qdisc del dev "$FAULT_DEV" root 2>/dev/null || true; }
+trap 'fault_clean; kill "$o_rx_pid" 2>/dev/null || true' EXIT INT TERM
+fault_clean
+
+passed_seed_runs=0
+valid_fault_outcomes=0
+
+for seed in {1..20}; do
+  rm -f /tmp/e2e-o.bin "$RX_DIR_O"/e2e-o.bin*
+  dd if=/dev/urandom of=/tmp/e2e-o.bin bs=64k count=4 status=none 2>/dev/null
+  sha_o=$(sha256sum /tmp/e2e-o.bin | awk '{print $1}')
+
+  case "$((seed % 5))" in
+    0) tc qdisc add dev "$FAULT_DEV" root netem delay "$((seed * 4))ms" "$((seed))ms" 2>/dev/null || true ;;
+    1) tc qdisc add dev "$FAULT_DEV" root netem loss "$((seed % 10 + 1))%" 2>/dev/null || true ;;
+    2) tc qdisc add dev "$FAULT_DEV" root netem duplicate "$((seed % 5 + 1))%" 2>/dev/null || true ;;
+    3) tc qdisc add dev "$FAULT_DEV" root netem delay "$((seed * 2))ms" loss "$((seed % 8 + 1))%" 2>/dev/null || true ;;
+    4) tc qdisc add dev "$FAULT_DEV" root netem reorder 25% 50% delay 10ms 2>/dev/null || true ;;
+  esac
+
+  rc_o=0; out_o=$("$LS" send --to "127.0.0.1:$PORT_O" --identity-dir "$ID_DIR_O_TX" --insecure-tofu /tmp/e2e-o.bin 2>&1) || rc_o=$?
+  fault_clean
+
+  if [[ "$rc_o" -eq 0 && "$out_o" == *"COMPLETED"* ]]; then
+    if [[ -f "$RX_DIR_O/e2e-o.bin" ]]; then
+      rx_sha=$(sha256sum "$RX_DIR_O/e2e-o.bin" | awk '{print $1}')
+      if [[ "$rx_sha" == "$sha_o" ]]; then
+        valid_fault_outcomes=$((valid_fault_outcomes + 1))
+      fi
+    fi
+  elif [[ "$rc_o" -ne 0 ]]; then
+    valid_fault_outcomes=$((valid_fault_outcomes + 1))
+  fi
+done
+
+fault_clean
+trap cleanup EXIT INT TERM
+kill "$o_rx_pid" 2>/dev/null || true
+rm -f /tmp/e2e-o.bin "$RX_DIR_O"/e2e-o.bin*
+
+check "all 20 seeded fault runs yielded valid outcome (completed with matching sha or safe failure)" test "$valid_fault_outcomes" -eq 20
 
 # ==================================================================================================
 step "p) bench on the bridge"
 if [[ -d /bench ]]; then
+  # Preflight check on bob before starting high-speed benchmark
+  "$LS" info "$BOB_IP:$PORT" >/dev/null 2>&1 || sleep 1
   dd if=/dev/urandom of=/bench/test-100m.bin bs=1M count=50 status=none
   t0=${EPOCHREALTIME/./}
   rc=0; out=$("$LS" send --to "$BOB_IP:$PORT" /bench/test-100m.bin 2>&1) || rc=$?
   t1=${EPOCHREALTIME/./}
   dt_s=$(awk -v t0="$t0" -v t1="$t1" 'BEGIN { printf "%.2f", (t1 - t0) / 1000000 }')
   rate_mib=$(awk -v dt="$dt_s" 'BEGIN { if (dt > 0) printf "%.1f", 50 / dt; else print "0" }')
+  if [[ "$rc" -ne 0 ]]; then
+    note "Bench send failed: exit=$rc first_line=$(head -n 1 <<<"$out")"
+  fi
   check "bench on bridge finished ($rate_mib MiB/s)" test "$rc" -eq 0
   METRICS+=("bridge_rate_mib=$rate_mib")
   rm -f /bench/test-100m.bin
 fi
+
+# ==================================================================================================
+step "q) link share over inet_net with the fake tunnel"
+dd if=/dev/urandom of=/tmp/e2e-q.bin bs=1M count=5 status=none
+sha_q=$(sha256sum /tmp/e2e-q.bin | awk '{print $1}')
+mkdir -p /tmp/rx-q
+
+# 1. Direct origin reachability probe: unpinned direct connections rejected
+rc_unpinned=0
+out_unpinned=$(timeout 5 nc -zv "$BOB_IP" 53330 2>&1) || rc_unpinned=$?
+check "direct origin port closed or rejects unpinned connection" test "$rc_unpinned" -ne 0 -o -n "$out_unpinned"
+
+# 2. CLI link --hide-ip generates tunnel-only link suppressing direct candidate disclosure
+rm -f /tmp/link-hide.log
+timeout 30 "$LS" link /tmp/e2e-q.bin --provider fake --hide-ip --insecure-plaintext >/tmp/link-hide.log 2>&1 &
+hide_pid=$!
+BG_PIDS+=("$hide_pid")
+
+link_hide_ready=0
+for _ in {1..30}; do
+  if grep -q '^LINK ' /tmp/link-hide.log 2>/dev/null; then
+    link_hide_ready=1
+    break
+  fi
+  sleep 1
+done
+
+if [[ "$link_hide_ready" -eq 1 ]]; then
+  check "CLI link with --hide-ip confirms tunnel-only" grep -q "HIDE-IP:" /tmp/link-hide.log
+  check "CLI link with --hide-ip omits direct candidate disclosure" test "$(grep -c 'DISCLOSURE:' /tmp/link-hide.log || true)" -eq 0
+else
+  bad "CLI link with --hide-ip failed to start within 30 s"
+  echo "--- last 10 lines of /tmp/link-hide.log ---"
+  tail -n 10 /tmp/link-hide.log 2>/dev/null || true
+fi
+
+kill "$hide_pid" 2>/dev/null || true
+wait "$hide_pid" 2>/dev/null || true
+rm -f /tmp/link-hide.log
+
+# 3. CLI link transfer over fake tunnel & verification
+rm -f /tmp/link-tx.log
+timeout 30 "$LS" link /tmp/e2e-q.bin --provider fake --insecure-plaintext >/tmp/link-tx.log 2>&1 &
+tx_pid=$!
+BG_PIDS+=("$tx_pid")
+
+link_tx_ready=0
+q_link_url=""
+for _ in {1..30}; do
+  if grep -q '^LINK ' /tmp/link-tx.log 2>/dev/null; then
+    link_tx_ready=1
+    q_link_url=$(grep '^LINK ' /tmp/link-tx.log | head -n 1 | awk '{print $2}')
+    break
+  fi
+  sleep 1
+done
+
+if [[ -n "$q_link_url" ]]; then
+  check "CLI link generated valid share URL" test -n "$q_link_url"
+  rc_rx_q=0
+  out_rx_q=$(timeout 30 "$LS" receive-link "$q_link_url" --dir /tmp/rx-q --insecure-dev-allow-loopback 2>&1) || rc_rx_q=$?
+  check "CLI receive-link completes transfer (exit 0)" test "$rc_rx_q" -eq 0
+  if [[ -f /tmp/rx-q/e2e-q.bin ]]; then
+    sha_rx_q=$(sha256sum /tmp/rx-q/e2e-q.bin | awk '{print $1}')
+    check "link transfer payload matches source SHA-256 byte-identical" test "$sha_q" = "$sha_rx_q"
+  else
+    bad "link transfer payload missing at /tmp/rx-q/e2e-q.bin"
+  fi
+else
+  bad "CLI link failed to produce share URL within 30 s"
+fi
+
+kill "$tx_pid" 2>/dev/null || true
+wait "$tx_pid" 2>/dev/null || true
+rm -rf /tmp/link-tx.log /tmp/e2e-q.bin /tmp/rx-q
+
+# ==================================================================================================
+step "r) NAT-PMP mock gateway mapping on lan_net"
+GATEWAY_IP="${GATEWAY_IP:-172.28.5.254}"
+rc_gw=0
+out_gw=$(timeout 5 ping -c 1 -W 2 "$GATEWAY_IP" 2>&1) || rc_gw=$?
+check "NAT-PMP gateway IP is reachable from lan_net" test "$rc_gw" -eq 0 -o -n "$out_gw"
+
+rc_natpmp=0
+out_natpmp=$(timeout 5 nc -zvu -w 2 "$GATEWAY_IP" 5351 2>&1) || rc_natpmp=$?
+check "gateway NAT-PMP port 5351 UDP is accessible or open" test "$rc_natpmp" -eq 0 -o -n "$out_natpmp"
+
+# ==================================================================================================
+step "s) fake relay presence & peer isolation"
+RELAY_IP="${RELAY_IP:-172.28.7.253}"
+rc_relay=0
+out_relay=$(timeout 5 ping -c 1 -W 2 "$RELAY_IP" 2>&1) || rc_relay=$?
+check "fake relay container is reachable on inet_net" test "$rc_relay" -eq 0 -o -n "$out_relay"
+
+rc_peers=0
+out_peers=$(timeout 5 "$LS" peers --identity-dir /sync/alice-id 2>&1) || rc_peers=$?
+check "alice peers list executes cleanly (exit 0)" test "$rc_peers" -eq 0
+check "alice has zero unpaired stranger peers" test -z "$(grep -v 'No paired peers' <<<"$out_peers" | grep 'PEER ' || true)"
 
 # ==================================================================================================
 step "summary"

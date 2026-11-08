@@ -69,16 +69,13 @@ class _LateFailure extends FakeSecurePeer {
 
 void main() {
   group('FailureReason.storageUnusable enum', () {
-    test(
-      'storageUnusable exists with wire STORAGE_UNUSABLE and round-trips via fromWire',
-      () {
-        expect(FailureReason.storageUnusable.wire, 'STORAGE_UNUSABLE');
-        expect(
-          FailureReason.fromWire('STORAGE_UNUSABLE'),
-          FailureReason.storageUnusable,
-        );
-      },
-    );
+    test('storageUnusable exists with wire STORAGE_UNUSABLE and round-trips via fromWire', () {
+      expect(FailureReason.storageUnusable.wire, 'STORAGE_UNUSABLE');
+      expect(
+        FailureReason.fromWire('STORAGE_UNUSABLE'),
+        FailureReason.storageUnusable,
+      );
+    });
   });
 
   group('FileSender mapping for insufficientStorage', () {
@@ -108,68 +105,56 @@ void main() {
       acceptTimeout: const Duration(seconds: 5),
     );
 
-    test(
-      'when download folder is not usable occurs on createSession, sender failure reason is storageUnusable',
-      () async {
-        final p = peer()
-          ..createError = LsException(
-            LsErrorCode.insufficientStorage,
-            'download folder is not usable',
-          );
-        final r = await sender(p).send([file]);
-        expect(r.isSuccess, isFalse);
-        expect(r.status, TransferStatus.failed);
-        expect(r.refusal, LsErrorCode.insufficientStorage);
-        expect(r.failureReason, FailureReason.storageUnusable);
-      },
-    );
+    test('when download folder is not usable occurs on createSession, sender failure reason is storageUnusable', () async {
+      final p = peer()
+        ..createError = LsException(
+          LsErrorCode.insufficientStorage,
+          'download folder is not usable',
+        );
+      final r = await sender(p).send([file]);
+      expect(r.isSuccess, isFalse);
+      expect(r.status, TransferStatus.failed);
+      expect(r.refusal, LsErrorCode.insufficientStorage);
+      expect(r.failureReason, FailureReason.storageUnusable);
+    });
 
-    test(
-      'when download folder is not usable occurs during transfer (chunk upload), sender failure reason is storageUnusable',
-      () async {
-        final p = peer()
-          ..putError = LsException(
-            LsErrorCode.insufficientStorage,
-            'download folder is not usable',
-          );
-        final r = await sender(p).send([file]);
-        expect(r.isSuccess, isFalse);
-        expect(r.status, TransferStatus.failed);
-        expect(r.refusal, LsErrorCode.insufficientStorage);
-        expect(r.failureReason, FailureReason.storageUnusable);
-      },
-    );
+    test('when download folder is not usable occurs during transfer (chunk upload), sender failure reason is storageUnusable', () async {
+      final p = peer()
+        ..putError = LsException(
+          LsErrorCode.insufficientStorage,
+          'download folder is not usable',
+        );
+      final r = await sender(p).send([file]);
+      expect(r.isSuccess, isFalse);
+      expect(r.status, TransferStatus.failed);
+      expect(r.refusal, LsErrorCode.insufficientStorage);
+      expect(r.failureReason, FailureReason.storageUnusable);
+    });
 
-    test(
-      'when not enough free space occurs on createSession, sender failure reason remains diskFull',
-      () async {
-        final p = peer()
-          ..createError = LsException(
-            LsErrorCode.insufficientStorage,
-            'not enough free space (need 1000 bytes)',
-          );
-        final r = await sender(p).send([file]);
-        expect(r.isSuccess, isFalse);
-        expect(r.status, TransferStatus.failed);
-        expect(r.refusal, LsErrorCode.insufficientStorage);
-        expect(r.failureReason, FailureReason.diskFull);
-      },
-    );
+    test('when not enough free space occurs on createSession, sender failure reason remains diskFull', () async {
+      final p = peer()
+        ..createError = LsException(
+          LsErrorCode.insufficientStorage,
+          'not enough free space (need 1000 bytes)',
+        );
+      final r = await sender(p).send([file]);
+      expect(r.isSuccess, isFalse);
+      expect(r.status, TransferStatus.failed);
+      expect(r.refusal, LsErrorCode.insufficientStorage);
+      expect(r.failureReason, FailureReason.diskFull);
+    });
 
-    test(
-      'when not enough free space occurs during transfer, sender failure reason remains diskFull',
-      () async {
-        final p = peer()
-          ..putError = LsException(
-            LsErrorCode.insufficientStorage,
-            'not enough free space (need 1000 bytes)',
-          );
-        final r = await sender(p).send([file]);
-        expect(r.isSuccess, isFalse);
-        expect(r.status, TransferStatus.failed);
-        expect(r.refusal, LsErrorCode.insufficientStorage);
-        expect(r.failureReason, FailureReason.diskFull);
-      },
-    );
+    test('when not enough free space occurs during transfer, sender failure reason remains diskFull', () async {
+      final p = peer()
+        ..putError = LsException(
+          LsErrorCode.insufficientStorage,
+          'not enough free space (need 1000 bytes)',
+        );
+      final r = await sender(p).send([file]);
+      expect(r.isSuccess, isFalse);
+      expect(r.status, TransferStatus.failed);
+      expect(r.refusal, LsErrorCode.insufficientStorage);
+      expect(r.failureReason, FailureReason.diskFull);
+    });
   });
 }

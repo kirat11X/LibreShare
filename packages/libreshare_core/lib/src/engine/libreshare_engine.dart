@@ -37,10 +37,13 @@ import '../model/device.dart';
 import '../model/events.dart';
 import '../model/ls_exception.dart';
 import '../protocol.dart';
+import '../ble/ble_contracts.dart';
 import '../client/peer_security_exceptions.dart';
-import '../security/cert_factory.dart' show parseCertificate;
+import '../security/cert_factory.dart'
+    show generateIdentityFor, parseCertificate;
 import '../security/crypto_primitives.dart' show fingerprintHex;
 import '../security/contracts.dart';
+import '../security/key_identity.dart';
 import '../security/pairing_service.dart';
 import '../security/pin_guard.dart';
 import '../security/tls_context.dart';
@@ -54,14 +57,25 @@ import '../server/api_server.dart';
 import '../storage/receive_settings_store.dart';
 import '../transfer/file_receiver.dart';
 import '../transfer/file_sender.dart';
+import '../transfer/native_sha256.dart';
+import '../transfer/speed_mode.dart';
 import '../connection/candidate.dart';
 import '../connection/connection.dart';
 import '../connection/connection_manager.dart';
+import '../connection/http_connection.dart';
+import '../client/peer_client.dart';
 import '../monitor/event_log.dart';
+import '../monitor/channel_event.dart';
+import '../model/transfer_status.dart';
 import '../storage/session_store.dart';
 import 'discovery_config.dart';
 import 'outgoing_send.dart';
 import 'security_wiring.dart';
+
+/// Default of the `chunkConcurrency` parameters of the send methods: the count
+/// comes from the engine's [LibreShareEngine.speedMode]. Any other value is used
+/// as given (an explicit 0 is therefore the speed mode's count, not an error).
+const int kChunkConcurrencyFromProfile = 0;
 
 class LibreShareEngine implements ReceiveGate {
   LibreShareEngine({
@@ -80,12 +94,14 @@ class LibreShareEngine implements ReceiveGate {
     this.advertiseIp,
     this.eventLog,
     this.sessionStore,
+    this.speedMode = kDefaultSpeedMode,
   }) : _registry = PeerRegistry(
          selfDeviceId: self.deviceId,
          clock: clock,
          expiry: discovery.peerExpiry,
          trust: security?.trust,
        ) {
+    installBestSha256Provider();
     final wiring = security;
     if (wiring != null && wiring.identity.identity.deviceId != self.deviceId) {
       // Otherwise peers would pin a certificate CN that disagrees with the id they are told.
@@ -125,6 +141,43 @@ class LibreShareEngine implements ReceiveGate {
       probe:
           discovery.infoProbe ?? (wiring == null ? null : _secureResolveProbe),
     );
+    final ble = discovery.bleBackend;
+    if (ble != null) {
+      final key = discovery.advKey ?? Uint8List(32);
+      _bleCoordinator = BleCoordinator(
+        self: self,
+        identity:
+            wiring?.identity ??
+            KeyIdentity.fromGenerated(generateIdentityFor(self.deviceId)),
+        trustStore: wiring?.trust,
+        peerRegistry: _registry,
+        bleBackend: ble,
+        advKey: key,
+        visibility: discovery.bleVisibility,
+        clock: clock,
+        localLanCandidates: () {
+          final p = _server?.port ?? preferredPort;
+          return [
+            for (final a in _addrs)
+              LanCandidate(ip: a.ip, port: p, iface: a.iface),
+          ];
+        },
+        probeLanCandidate: (cand) async {
+          try {
+            final s = await Socket.connect(
+              cand.ip,
+              cand.port,
+              timeout: const Duration(seconds: 2),
+            );
+            await s.close();
+            return true;
+          } catch (_) {
+            return false;
+          }
+        },
+        onTransferPrompt: discovery.onBleTransferPrompt,
+      );
+    }
   }
 
   /// Identity template: id, alias, platform, type, fingerprint, caps. Its
@@ -162,6 +215,11 @@ class LibreShareEngine implements ReceiveGate {
   final String? advertiseIp;
   final EventLog? eventLog;
   final SessionStore? sessionStore;
+
+  /// Local speed mode: how many chunks of one file go in parallel when a send
+  /// passes no `chunkConcurrency`. Read when a send starts, so a change never
+  /// touches a running send. Never sent on the wire.
+  SpeedMode speedMode;
 
   /// Owner of Receive mode (Off / For(N) / Always, visibility, pauses). Its
   /// gate is this engine.
@@ -201,6 +259,7 @@ class LibreShareEngine implements ReceiveGate {
   List<DeviceAddress> _addrs = const [];
   Timer? _addrTimer;
   MulticastDiscovery? _multicast;
+  BleCoordinator? _bleCoordinator;
   ScanPolicy? _scanPolicy;
   StreamSubscription<DiscoveryEvent>? _scanWatch;
   StreamSubscription<MdnsPeer>? _mdnsSub;
@@ -234,6 +293,9 @@ class LibreShareEngine implements ReceiveGate {
 
   /// The port the listener is bound to. Throws [StateError] unless listening.
   int get port => _server?.port ?? (throw StateError('engine not started'));
+
+  /// Optional BLE coordinator for out-of-band discovery & transfer handoff (Increment 7).
+  BleCoordinator? get bleCoordinator => _bleCoordinator;
 
   /// What this device is right now: [self] with the **bound** port (0 while no
   /// listener is open) and the current local addresses. This is what
@@ -547,6 +609,10 @@ class LibreShareEngine implements ReceiveGate {
       if (server != null) await _goodbye(multicast);
       await multicast.stop();
     }
+    final ble = _bleCoordinator;
+    if (ble != null) {
+      await ble.stop();
+    }
 
     await serverClosed;
     _receiver?.dispose();
@@ -780,7 +846,7 @@ class LibreShareEngine implements ReceiveGate {
     required String host,
     required int port,
     String? pin,
-    int chunkConcurrency = 3,
+    int chunkConcurrency = kChunkConcurrencyFromProfile,
     Duration acceptTimeout = kPermissionTimeout,
   }) async => beginSendFiles(
     files,
@@ -800,7 +866,7 @@ class LibreShareEngine implements ReceiveGate {
     DiscoveredDevice device,
     List<File> files, {
     String? pin,
-    int chunkConcurrency = 3,
+    int chunkConcurrency = kChunkConcurrencyFromProfile,
     Duration acceptTimeout = kPermissionTimeout,
     Duration probeTimeout = const Duration(milliseconds: 1500),
   }) async => beginSendTo(
@@ -824,7 +890,7 @@ class LibreShareEngine implements ReceiveGate {
     required String host,
     required int port,
     String? pin,
-    int chunkConcurrency = 3,
+    int chunkConcurrency = kChunkConcurrencyFromProfile,
     Duration acceptTimeout = kPermissionTimeout,
   }) => _beginSend(
     files,
@@ -842,7 +908,7 @@ class LibreShareEngine implements ReceiveGate {
     DiscoveredDevice device,
     List<File> files, {
     String? pin,
-    int chunkConcurrency = 3,
+    int chunkConcurrency = kChunkConcurrencyFromProfile,
     Duration acceptTimeout = kPermissionTimeout,
     Duration probeTimeout = const Duration(milliseconds: 1500),
   }) => beginSendToCandidates(
@@ -859,24 +925,34 @@ class LibreShareEngine implements ReceiveGate {
     DiscoveredDevice device,
     List<File> files, {
     String? pin,
-    int chunkConcurrency = 3,
+    int chunkConcurrency = kChunkConcurrencyFromProfile,
     Duration acceptTimeout = kPermissionTimeout,
     Duration probeTimeout = const Duration(milliseconds: 1500),
     List<Candidate>? candidates,
     bool enableFallback = true,
-  }) => _beginSend(
-    files,
-    find: (cancel) => _findEndpointWithLadder(
+  }) {
+    // Shared by the lookup (which fills in the ladder) and the sender (which falls back along it).
+    final ladder = _LadderSend(
       device: device,
-      probeTimeout: probeTimeout,
-      cancel: cancel,
-      candidates: candidates,
       enableFallback: enableFallback,
-    ),
-    pin: pin,
-    chunkConcurrency: chunkConcurrency,
-    acceptTimeout: acceptTimeout,
-  );
+      probeTimeout: probeTimeout,
+    );
+    return _beginSend(
+      files,
+      find: (cancel) => _findEndpointWithLadder(
+        device: device,
+        probeTimeout: probeTimeout,
+        cancel: cancel,
+        candidates: candidates,
+        enableFallback: enableFallback,
+        ladder: ladder,
+      ),
+      pin: pin,
+      chunkConcurrency: chunkConcurrency,
+      acceptTimeout: acceptTimeout,
+      ladder: ladder,
+    );
+  }
 
   OutgoingSend _beginSend(
     List<File> files, {
@@ -884,7 +960,12 @@ class LibreShareEngine implements ReceiveGate {
     required String? pin,
     required int chunkConcurrency,
     required Duration acceptTimeout,
+    _LadderSend? ladder,
   }) {
+    // The sentinel means the speed mode decides; any other count is used as given.
+    final concurrency = chunkConcurrency == kChunkConcurrencyFromProfile
+        ? speedProfileFor(speedMode).chunkConcurrency
+        : chunkConcurrency;
     if (!_secure) {
       return OutgoingSend.start(
         files: files,
@@ -894,9 +975,10 @@ class LibreShareEngine implements ReceiveGate {
           client: client,
           self: deviceInfo,
           pin: pin,
-          chunkConcurrency: chunkConcurrency,
+          chunkConcurrency: concurrency,
           acceptTimeout: acceptTimeout,
           onEvent: onEvent,
+          nextClient: _fallbackFor(ladder, () => null),
         ),
         publish: _emit,
       );
@@ -931,12 +1013,13 @@ class LibreShareEngine implements ReceiveGate {
           client: client,
           self: deviceInfo,
           pin: pin,
-          chunkConcurrency: chunkConcurrency,
+          chunkConcurrency: concurrency,
           acceptTimeout: acceptTimeout,
           onEvent: onEvent,
           security: p.plaintext ? const SecurityConfig.plaintext() : _config,
           pinnedReceiverFingerprint: p.pin,
           onAccepted: (fp) => _pinReceiver(p, fp),
+          nextClient: _fallbackFor(ladder, () => plan),
         );
       },
       publish: _emit,
@@ -1243,6 +1326,7 @@ class LibreShareEngine implements ReceiveGate {
     required CancelSignal cancel,
     List<Candidate>? candidates,
     bool enableFallback = true,
+    _LadderSend? ladder,
   }) async {
     if (cancel.isCancelled) return null;
     if (device.info.port < 1) return null;
@@ -1253,6 +1337,11 @@ class LibreShareEngine implements ReceiveGate {
     if (list.isEmpty) {
       return _findEndpoint(device, probeTimeout, cancel);
     }
+    // The ladder order (the one ConnectionManager uses): a send falls back along it.
+    final sorted = List<Candidate>.of(list)..sort();
+    ladder?.candidates = sorted;
+    // Candidates that refused on their pinned key: never used, reported below.
+    final keyRefused = <Candidate>[];
     final mgr = ConnectionManager(
       candidates: list,
       security: _secure ? _config : const SecurityConfig.plaintext(),
@@ -1262,36 +1351,49 @@ class LibreShareEngine implements ReceiveGate {
           ? device.info.fingerprint
           : null,
       enableFallback: enableFallback,
+      connectionFactory: (c, sec) => _PinWatchConnection(
+        HttpConnection(candidate: c, security: sec),
+        keyRefused.add,
+      ),
     );
     final sub = mgr.events.listen((e) {
       _emit(ChannelStateChanged(e));
     });
+    SendEndpoint? found;
     try {
       while (!cancel.isCancelled) {
         try {
           if (mgr.activeCandidate == null) {
-            final connectFuture = mgr.connect(timeout: probeTimeout);
-            await Future.any([connectFuture, cancel.whenCancelled]);
-            if (cancel.isCancelled) return null;
+            await Future.any([
+              mgr.connect(timeout: probeTimeout),
+              cancel.whenCancelled,
+            ]);
           } else {
-            final fallbackFuture = mgr.fallbackToNext(
-              reason: 'device_id_mismatch',
-            );
-            await Future.any([fallbackFuture, cancel.whenCancelled]);
-            if (cancel.isCancelled) return null;
+            await Future.any([
+              mgr.fallbackToNext(reason: 'device_id_mismatch'),
+              cancel.whenCancelled,
+            ]);
           }
         } on ConnectionException {
           break;
         }
+        if (cancel.isCancelled) break;
         final active = mgr.activeCandidate;
         if (active == null) break;
         final answers = await Future.any<bool>([
           _answersAs(active.host, active.port, device.id, probeTimeout),
           cancel.whenCancelled.then((_) => false),
         ]);
-        if (cancel.isCancelled) return null;
+        if (cancel.isCancelled) break;
         if (answers) {
-          return (host: active.host, port: active.port);
+          final at = sorted.indexOf(active);
+          if (at < 0) {
+            ladder?.candidates = const []; // unknown position: no fallback
+          } else {
+            ladder?.index = at;
+          }
+          found = (host: active.host, port: active.port);
+          break;
         }
         if (!enableFallback) break;
       }
@@ -1301,6 +1403,187 @@ class LibreShareEngine implements ReceiveGate {
       await sub.cancel();
       await mgr.close();
     }
+    final changed = await _reportKeyChanges(device, keyRefused);
+    if (cancel.isCancelled) return null;
+    if (found != null) return found;
+    if (changed) {
+      // The only candidates that answered presented another key: refused, FAILED.
+      throw EndpointRefusedException(
+        FailureReason.protocolError,
+        'peer presented a key other than the pinned one',
+      );
+    }
+    return null;
+  }
+
+  /// Emits [PeerKeyChanged] for each candidate that refused on its pinned key
+  /// and really presents another key. Returns true when one was reported.
+  Future<bool> _reportKeyChanges(
+    DiscoveredDevice device,
+    List<Candidate> refused,
+  ) async {
+    var changed = false;
+    for (final c in refused) {
+      final pin = c.peerFingerprint.isNotEmpty
+          ? c.peerFingerprint
+          : device.info.fingerprint;
+      if (!_secure || pin.isEmpty) continue;
+      final presented = await _presentedFingerprint(c.host, c.port);
+      if (presented == null || presented.toUpperCase() == pin.toUpperCase()) {
+        continue;
+      }
+      _emit(
+        PeerKeyChanged(
+          deviceId: device.id,
+          pinnedFingerprint: pin,
+          presentedFingerprint: presented,
+        ),
+      );
+      changed = true;
+    }
+    return changed;
+  }
+
+  /// The certificate fingerprint [host]:[port] presents, learnt with one `GET /info` on an
+  /// unpinned connection (the same probe as [_plan]). Null when nothing answers. Used only to
+  /// report a refused key; nothing is sent to the peer with it.
+  Future<String?> _presentedFingerprint(String host, int port) async {
+    final probe = ApiClient(
+      host: host,
+      port: port,
+      security: _config,
+      requestTimeout: const Duration(seconds: 10),
+    );
+    try {
+      await probe.info();
+      return probe.serverFingerprint;
+    } on Object {
+      return null;
+    } finally {
+      probe.close();
+    }
+  }
+
+  /// The FR-13 fallback of a ladder send, or null when there is no ladder to fall back along.
+  Future<PeerClient?> Function(PeerClient failed)? _fallbackFor(
+    _LadderSend? ladder,
+    _SendPlan? Function() planOf,
+  ) {
+    if (ladder == null || !ladder.enableFallback || ladder.candidates.isEmpty) {
+      return null;
+    }
+    return (failed) => _nextLadderClient(ladder, failed, planOf());
+  }
+
+  /// Mid-transfer fallback (FR-13): the next ladder candidate after the failed tier, checked
+  /// exactly like the first contact (same device, same pinned key). Null when none is left.
+  /// Throws [PeerFingerprintMismatchException] (after [PeerKeyChanged]) when a candidate
+  /// presents another key: nothing is sent to it.
+  Future<PeerClient?> _nextLadderClient(
+    _LadderSend ladder,
+    PeerClient failed,
+    _SendPlan? plan,
+  ) async {
+    final from = ladder.index;
+    String? pin;
+    if (_secure) {
+      // The pinned key of the peer, or (first contact) the key the session was accepted with.
+      final seen = failed is SecurePeerClient ? failed.serverFingerprint : null;
+      pin = plan?.pin ?? seen;
+      if (pin == null) return null;
+      if (plan?.pin != null &&
+          seen != null &&
+          plan!.pin!.toUpperCase() != seen.toUpperCase()) {
+        return null;
+      }
+    }
+    for (var i = from + 1; i < ladder.candidates.length; i++) {
+      final c = ladder.candidates[i];
+      final client = await _tierClient(ladder, c, pin);
+      if (client == null) continue;
+      ladder.index = i;
+      final now = DateTime.now().toUtc();
+      final switched = ChannelTierSwitched(
+        fromCandidate: from >= 0 ? ladder.candidates[from] : null,
+        toCandidate: c,
+        reason: 'send_failed',
+        timestamp: now,
+      );
+      _emit(ChannelStateChanged(switched));
+      unawaited(eventLog?.logChannel(switched));
+      final active = ChannelActive(
+        candidate: c,
+        rtt: Duration.zero,
+        timestamp: now,
+      );
+      _emit(ChannelStateChanged(active));
+      unawaited(eventLog?.logChannel(active));
+      return client;
+    }
+    return null;
+  }
+
+  /// A client for [c] that answers as the device of [ladder], or null when it does not answer
+  /// so. Secure profile: [pin] is the key the peer must present; a different one is reported as
+  /// PeerKeyChanged and refused by throwing, and the pinned connection is only made after that.
+  Future<PeerClient?> _tierClient(
+    _LadderSend ladder,
+    Candidate c,
+    String? pin,
+  ) async {
+    final device = ladder.device;
+    final timeout = ladder.probeTimeout;
+    if (!_secure) {
+      final client = ApiClient(
+        host: c.host,
+        port: c.port,
+        connectTimeout: timeout,
+      );
+      try {
+        final info = await client.info().timeout(timeout);
+        if (info.deviceId == device.id) return client;
+      } on Object {
+        // not this device: fall through
+      }
+      client.close();
+      return null;
+    }
+    final expected = pin;
+    if (expected == null) return null;
+    final presented = await _presentedFingerprint(c.host, c.port);
+    if (presented == null) return null;
+    if (presented.toUpperCase() != expected.toUpperCase()) {
+      _emit(
+        PeerKeyChanged(
+          deviceId: device.id,
+          pinnedFingerprint: expected,
+          presentedFingerprint: presented,
+        ),
+      );
+      throw PeerFingerprintMismatchException(
+        shortFp(expected),
+        shortFp(presented),
+      );
+    }
+    final client = ApiClient(
+      host: c.host,
+      port: c.port,
+      security: _config,
+      expectedFingerprint: expected,
+      connectTimeout: timeout,
+    );
+    try {
+      final info = await client.info().timeout(timeout);
+      final seen = client.serverFingerprint;
+      if (info.deviceId == device.id &&
+          seen != null &&
+          seen.toUpperCase() == expected.toUpperCase()) {
+        return client;
+      }
+    } on Object {
+      // refused by the pinned TLS check or not this device
+    }
+    client.close();
     return null;
   }
 
@@ -1493,6 +1776,10 @@ class LibreShareEngine implements ReceiveGate {
         _log.warning('mDNS browsing unavailable: ${e.runtimeType}');
       }
     }
+    final ble = _bleCoordinator;
+    if (ble != null) {
+      await ble.start();
+    }
   }
 
   Future<void> _syncMdns() async {
@@ -1650,6 +1937,7 @@ class _PinningSender extends FileSender {
     required this.onAccepted,
     super.pin,
     super.onEvent,
+    super.nextClient,
   });
 
   final Future<void> Function(String fingerprint) onAccepted;
@@ -1661,4 +1949,57 @@ class _PinningSender extends FileSender {
     if (fp != null && pinnedReceiverFingerprint == null) await onAccepted(fp);
     return r;
   }
+}
+
+/// The candidate ladder of one send (Increment 4, FR-13): the candidates in ladder order and the
+/// tier in use. The lookup fills it in; the sender falls back along it.
+class _LadderSend {
+  _LadderSend({
+    required this.device,
+    required this.enableFallback,
+    required this.probeTimeout,
+  });
+
+  final DiscoveredDevice device;
+  final bool enableFallback;
+  final Duration probeTimeout;
+
+  /// Ladder order; empty when the send did not go through the ladder.
+  List<Candidate> candidates = const [];
+
+  /// Index into [candidates] of the tier in use, -1 before one was chosen.
+  int index = -1;
+}
+
+/// A ladder connection that reports the candidates which refused on their pinned key.
+class _PinWatchConnection implements Connection {
+  _PinWatchConnection(this._inner, this._onKeyRefused);
+
+  final Connection _inner;
+  final void Function(Candidate) _onKeyRefused;
+
+  @override
+  Candidate get candidate => _inner.candidate;
+
+  @override
+  ConnectionState get state => _inner.state;
+
+  @override
+  bool get isHealthy => _inner.isHealthy;
+
+  @override
+  Duration? get latency => _inner.latency;
+
+  @override
+  Future<PeerClient> open({Duration? timeout}) async {
+    try {
+      return await _inner.open(timeout: timeout);
+    } on FingerprintMismatchException {
+      _onKeyRefused(_inner.candidate);
+      rethrow;
+    }
+  }
+
+  @override
+  Future<void> close() => _inner.close();
 }

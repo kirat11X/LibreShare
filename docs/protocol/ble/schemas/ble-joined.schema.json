@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://libreshare.org/schemas/ble-joined.schema.json",
+  "title": "BleJoined",
+  "description": "LS-BLE/1 Encrypted joined acknowledgment from joiner.",
+  "type": "object",
+  "required": ["type", "offerId", "clientIp"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "joined"
+    },
+    "offerId": {
+      "type": "string"
+    },
+    "clientIp": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": false
+}

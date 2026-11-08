@@ -21,6 +21,7 @@ enum FailureReason {
   verifyFailed('VERIFY_FAILED'),
   noConnection('NO_CONNECTION'),
   diskFull('DISK_FULL'),
+  storageUnusable('STORAGE_UNUSABLE'),
   protocolError('PROTOCOL_ERROR');
 
   const FailureReason(this.wire);

@@ -146,3 +146,82 @@ Result in `mut` with this change: tester 12 + probes 24 + round2 file 6 = **+42 
 1. **MEDIUM (open): handshake timeout does not close the connection** (X4, X5b, X8, E1). Fix: the gate above (validated), or at minimum do not release the slot on timeout.
 2. **LOW (open): test coverage of the two fixes lives only in my probe files.** Adopt `verifier-tests/connection_cap_verifier_probes_test.dart` (round-1 file, 20 tests, X4/X5 there are only characterisations) plus `verifier-tests/connection_cap_verifier_round2_test.dart` (6 tests: X4, X5, X5b, X6, X7, X8; X4/X5b/X8 are red until finding 1 is fixed) into `test/security/`. Note the round-2 file supersedes X4/X5 of the round-1 file: if both are adopted, delete the old X4/X5 to avoid duplicates (the old X4 only prints).
 3. **INFO: apply-notes.md says the round-1 probe file is "green with this patch"** - true for that file (its X4/X5 only print), but the round-2 file is not.
+
+---
+
+# Round 3 (re-verification of the gated handshake; 2026-11-07 15:06-15:36)
+
+Scratch: `.toolchain/scratch/e5-r4a-verify4/` (clone, `mut` for mutations, `mut2` for the fix experiment). Fresh clone of the CURRENT real tree (rsync with `--exclude=.toolchain --exclude=dist --exclude=build --exclude=.dart_tool --exclude=.git --exclude='scratch_*' --exclude='test_c_*' --exclude='/test_*.dart'`; it already contains R4b, R4c, R4e, R1c/R1d), `grep -c '^--- ' patch.diff` = 2, `patch -p1 < patch.diff` rc 0, no .rej/.orig. Tester file copied unchanged (byte-identical to round 1/2). No lib/ edit, no tester edit, real tree untouched. Every run alone under `flock -o /tmp/libreshare-heavy.lock`, `TMPDIR=$REPO/.toolchain/tmp`. Logs: `e5-r4a-verify4/logs/`; stamped summary: `verifier-tests/run-summary-round3.txt`.
+
+## Round 3 verdict: SAFE AFTER FIXES (one small, validated fix; otherwise good)
+
+What is now right: half-close bypass fixed (X3 = 2 of 10), handshake timeout really closes the connection (X4, X5b, X8 green: 24 of 24 stalled connections closed), the new gate drops silent, slow, oversize, lying-length and non-TLS first-byte clients, real pinned `ApiClient` works with 100 ms latency and with the ClientHello trickled byte by byte, and the cap stays honest (never under-counts).
+
+What is still wrong (MEDIUM, new finding): the gate only checks the record FRAMING, not that the record is a ClientHello. A 5-byte record header with length 0 (R2b) or a 9-byte message "record length 4 + ClientHello header claiming 500 bytes" (R2d) passes phase 1; `secureServer` then waits for more bytes forever, and that phase cannot be aborted, so the slot is held until the client closes (R2b and R2d: server did not close within 3 s). The gate therefore stops only lazy attackers; a 9-byte message holds a slot permanently (same bound as round 1, no better). Fix (validated, below): require the first record to hold exactly one whole ClientHello. Residual after the fix: an attacker who replays a REAL ClientHello and then stalls (R5) still holds its slot; that is unavoidable with dart:io (no handle to abort the detached descriptor) but is bounded and counted (see "How many can an attacker hold").
+
+## Round 3 gate table (core package unless noted)
+
+| gate | command | when | rc | result |
+|---|---|---|---|---|
+| patch | `patch -p1 < patch.diff` (clone root) | 15:06:58 | 0 | clean; `grep -c '^--- '` = 2 |
+| tester file x3 | `dart test -j 1 test/security/connection_cap_test.dart` | 15:12:16, 15:12:49, 15:13:15 | 0,0,0 | +12 each |
+| ALL verifier files on the coder's patch | `dart test -j 1 -r expanded` on `connection_cap_verifier_probes_test.dart` (18), `..._round2_test.dart` (6), `..._round3_test.dart` (13) | 15:13:43 | 1 | +35 -2 (37 tests); red: R2b, R2d only |
+| same + tester, with the ClientHello check (mut2) | tester 12 + 37 | 15:14:45 | 0 | **+49 all passed** |
+| analyze | `dart analyze --fatal-infos lib/src/server` + the tester file + the three verifier files | 15:16:15 | 0 | No issues found |
+| format | `dart format --output=none --set-exit-if-changed` on api_server.dart, capped_server_socket.dart, tester file, three verifier files | 15:16:15 | 0 | 6 files, 0 changed |
+| analyze of the fixed lib | `dart analyze --fatal-infos lib/src/server` in mut2 | 15:16:15 | 0 | No issues found |
+
+Full suites skipped as instructed.
+
+## Round 3 mutation table (tester 12 + 37 verifier tests; each applied alone, restored, `diff -r clone mut` rc 0 every time; R2b/R2d are red in the baseline too and are listed only when they are the sole detector)
+
+| mutation | red tests (besides R2b/R2d) | verdict |
+|---|---|---|
+| `halfclose`: restore the read-side release | X3 | killed (X3 only; none of the 12 tester tests) |
+| `notimeout`: first-record timer = 1 day | X5, X5b, X6, R1, R4 | killed |
+| `timeoutleak`: `fail()` destroys but does not release | P3, P4b, X5, X6, R1, R2a, R2c, R4, R8 | killed |
+| `skipwhole`: stop waiting for the whole record (gate completes after 5 bytes) | X4, X5, X5b, X6, R1, R7 | killed |
+| `nobuffered`: drop `bufferedData: record` | tester `tls-per-ip-cap`; P1, P1b, P2, P3, P4b, P5, P6 x2, X1, X2, X7, R2c, R3, R5, R6 (all TLS clients fail) | killed |
+| `releasebefore`: release the slot before the handshake settles | R5 | killed (R5 only) |
+| `nontls`: non-TLS first byte not destroyed at once | R8 | killed (R8 only) |
+| `nolen`: no 16640 length bound | R2a | killed (R2a only) |
+| `nopending`: `destroyAll` skips handshaking sockets | X4, R7 | killed |
+
+Note: only `nobuffered` is also caught by a tester test; the other new guards are protected by the verifier files alone, so they must be adopted.
+
+## Break attempts (file `connection_cap_verifier_round3_test.dart`, 13 tests; "on patch" = coder's code; "with fix" = ClientHello check)
+
+| attack | result |
+|---|---|
+| R1 trickle one byte per 400 ms after a 512-byte record header (timeout 2 s) | closed at 2.0 s, slot freed (timeout is TOTAL, not per byte) |
+| R2a record length 0xFFFF (lie / oversize) | closed in 0.5 ms |
+| R2b record length 0 | **on patch: not closed (slot held)**; with fix: closed in 0.4 ms |
+| R2c full 16640-byte garbage record | closed in 2 ms, slot freed |
+| R2d complete 9-byte message claiming a 500-byte ClientHello | **on patch: not closed (slot held)**; with fix: closed in 0.3 ms |
+| R3 real ApiClient, ClientHello trickled in 1-byte packets (600 bytes through a proxy) | works |
+| R4 connect and send nothing | closed at 1.5 s (the timeout), slot freed |
+| R5 complete real ClientHello, then silence (4 attackers, per-IP cap 4, timeout 1 s) | not closed (cannot be), but counted: direct attempts from the same IP are refused at 0.3 s AND at 3.3 s |
+| R6a/b/c real pinned `ApiClient.info()` direct / 100 ms latency per direction (about 520 ms) / 100 ms latency with a 1.5 s timeout x3 | all work |
+| R7 `stop(force: true)` with a phase-1 and two phase-2 stalled sockets | returns in 0 ms; phase-1 client closed after 0.3 s; the port is reused immediately; phase-2 sockets cannot be closed by stop (no handle), they die when the client or process ends |
+| R8 plain HTTP on the TLS port | closed in 0.7 ms |
+
+### How many stalled-after-ClientHello sockets can an attacker hold? Bounded by the caps, never uncounted
+`maxConnectionsPerIp` (16) per source address, `maxConnections` (64) in total, until the client gives up (there is no phase-2 timeout and none is possible). So 4 source addresses, or one address that is shared with the victims (NAT, hotspot), can occupy every slot of a TLS listener until they disconnect. That is the same hard bound as round 1, no worse; R5 proves the counter stays honest (the `releasebefore` mutation, which makes it dishonest, turns R5 red). If this matters, the only real cure is to do the handshake on a `RawSecureSocket` (a handle that `close()` aborts, experiment E5 of round 2) and wrap the result in an own `Socket` adapter: a larger change, not recommended for this patch.
+
+## Concrete fix (validated)
+
+`verifier-tests/fix-proposal-r3-clienthello-check.diff` (17 lines against the coder's `capped_server_socket.dart`, only inside `_readFirstRecord`): reject the record when its length is below 4 or above 16640, and, once 9 bytes are in, when the handshake type is not 1 (ClientHello) or the 3-byte handshake length is not exactly record length - 4. Real clients (checked: the real `ApiClient`, `dart:io` `HttpClient`, the 1-byte-trickled and 100 ms-latency variants) send one whole ClientHello in the first record, so nothing legitimate is dropped; tester 12 + 37 verifier tests = 49 all green. (A ClientHello split over several records, legal but unused in practice, would be refused.) The coder may instead document the limitation, but then R2b and R2d must not be adopted red.
+
+## Verifier test files to apply (exact list; copy to `packages/libreshare_core/test/security/`)
+
+All three are formatted, analyze-clean under `--fatal-infos`, with no `dart:mirrors`, and in `docs/plans/e-proposals/r4a/verifier-tests/`:
+1. `connection_cap_verifier_probes_test.dart` (CONSOLIDATED, 18 tests: P1, P1b, P2 x2, X1, X1b, P3, P3b, P4, P4b, P4c, P5, P6 x4, X2, X3). The round-1 print-only X4/X5 were removed from it; the original is kept as `connection_cap_verifier_probes_test.round1-original.dart.txt` (not a test).
+2. `connection_cap_verifier_round2_test.dart` (6 tests: X4, X5, X5b, X6, X7, X8; unchanged since round 2).
+3. `connection_cap_verifier_round3_test.dart` (13 tests: R1, R2a-d, R4, R8, R3, R6a-c, R5, R7). R2b and R2d are red unless the ClientHello-check fix is applied (they pass with it).
+Plus the tester's `connection_cap_test.dart`. Nothing is duplicated between the three verifier files (the old X4/X5 characterisations exist only in the `.txt`). Runtime of all verifier files together: about 60 seconds; X5 alone needs 12.5 s (it checks the default 10 s timeout).
+
+## Round 3 findings
+1. **MEDIUM (open): gate checks framing only** (R2b, R2d): a 5-9 byte message holds a slot forever. Fix: `fix-proposal-r3-clienthello-check.diff` (validated).
+2. **INFO (accepted limit):** stalled-after-valid-ClientHello sockets hold their slots (bounded 16/IP, 64 total); cannot be fixed without a RawSecureSocket adapter.
+3. **LOW:** `stop(force)` cannot close phase-2 sockets (same root cause); harmless for process exit and port reuse (R7).
+4. **INFO:** only `nobuffered` is caught by the tester file; keep the verifier files in the suite.

@@ -382,6 +382,7 @@ void main() {
             'and that Receive is on.',
         FailureReason.diskFull:
             'There is not enough free space on the receiving device.',
+        FailureReason.storageUnusable: 'The download folder on the receiving device is not usable or unwritable.',
         FailureReason.protocolError:
             'Something went wrong during the transfer.',
       };

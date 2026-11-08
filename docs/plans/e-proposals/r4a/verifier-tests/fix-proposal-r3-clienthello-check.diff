@@ -1,0 +1,17 @@
+--- a/packages/libreshare_core/lib/src/server/capped_server_socket.dart
++++ b/packages/libreshare_core/lib/src/server/capped_server_socket.dart
+@@ -313,7 +313,13 @@
+       }
+       if (b.length >= 5) {
+         final len = (b[3] << 8) | b[4];
+-        if (len > 16640) {
++        // The first record must carry ONE whole ClientHello (type 1, 3-byte length = record
++        // length - 4). A record that only starts a longer handshake message would keep
++        // secureServer waiting for more bytes, which cannot be aborted.
++        if (len > 16640 || len < 4) {
++          if (!done.isCompleted) done.complete(null);
++        } else if (b.length >= 9 &&
++            (b[5] != 0x01 || ((b[6] << 16) | (b[7] << 8) | b[8]) != len - 4)) {
+           if (!done.isCompleted) done.complete(null);
+         } else if (b.length >= 5 + len && !done.isCompleted) {
+           done.complete(b);

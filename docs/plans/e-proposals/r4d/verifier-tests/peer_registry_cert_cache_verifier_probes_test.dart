@@ -1,3 +1,4 @@
+// ignore_for_file: avoid_print, uri_does_not_exist, undefined_function, cast_to_non_type, undefined_identifier
 // VERIFIER probes for E5 / R4d (written by the verifier, not by the tester or the coder).
 // P1..P6 exercise the per-source certificate cap of PeerRegistry from outside. Bookkeeping map sizes
 // are read with dart:mirrors (private fields `_certs`, `_certSource`, `_certSourceCount`), so lib/ is
@@ -60,8 +61,10 @@ void main() {
     establishLegit();
     var learned = 0;
     for (final p in pool) {
-      if (reg.learnCertificate(p.certDer))
-        learned++; // never listed: unknown bucket
+      // never listed: unknown bucket
+      if (reg.learnCertificate(p.certDer)) {
+        learned++;
+      }
     }
     print(
       'VERIFIER P1 learned=$learned legit alive=${legitAlive()}/10 '
