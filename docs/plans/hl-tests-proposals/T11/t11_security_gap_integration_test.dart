@@ -65,7 +65,11 @@ Future<void> main() async {
           bobIdentity.deviceId,
           bobIdentity.fingerprint,
         );
-        expect(isPinned, isTrue, reason: 'Peer cert fingerprint must be pinned');
+        expect(
+          isPinned,
+          isTrue,
+          reason: 'Peer cert fingerprint must be pinned',
+        );
       },
     );
 
@@ -145,73 +149,88 @@ Future<void> main() async {
       );
     });
 
-    test('SAS 6-digit confirmation code matches identically on both peers', () async {
-      final alice = await rig.start('Alice', secure: true);
-      final bob = await rig.start('Bob', secure: true);
+    test(
+      'SAS 6-digit confirmation code matches identically on both peers',
+      () async {
+        final alice = await rig.start('Alice', secure: true);
+        final bob = await rig.start('Bob', secure: true);
 
-      final testFile = src('sas-check.txt', 256, seed: 104);
-      final sendFuture = sendTo(alice, bob, [testFile]);
+        final testFile = src('sas-check.txt', 256, seed: 104);
+        final sendFuture = sendTo(alice, bob, [testFile]);
 
-      // Both Alice and Bob must emit SasReady before transfer completes
-      final aliceSas = await alice.events.next<SasReady>(
-        what: 'Alice SasReady',
-      );
-      final bobSas = await bob.events.next<SasReady>(
-        what: 'Bob SasReady',
-      );
+        // Both Alice and Bob must emit SasReady before transfer completes
+        final aliceSas = await alice.events.next<SasReady>(
+          what: 'Alice SasReady',
+        );
+        final bobSas = await bob.events.next<SasReady>(what: 'Bob SasReady');
 
-      expect(aliceSas.code, bobSas.code, reason: 'SAS codes must match identically');
-      expect(aliceSas.code.length, 6, reason: 'SAS code must be 6 digits');
+        expect(
+          aliceSas.code,
+          bobSas.code,
+          reason: 'SAS codes must match identically',
+        );
+        expect(aliceSas.code.length, 6, reason: 'SAS code must be 6 digits');
 
-      final result = await sendFuture;
-      expect(result.isSuccess, isTrue);
-    });
+        final result = await sendFuture;
+        expect(result.isSuccess, isTrue);
+      },
+    );
   });
 
   group('T11 - FR-16 PIN Lockout & Path Traversal Defense', skip: skip, () {
-    test('5 consecutive wrong PIN attempts lock out the sender IP for 10 minutes', () async {
-      const correctPin = '654321';
-      final bob = await rig.start(
-        'Bob',
-        secure: true,
-        pinPolicy: const PinPolicy.fixed(),
-        pin: correctPin,
-      );
-      final alice = await rig.start('Alice', secure: true);
+    test(
+      '5 consecutive wrong PIN attempts lock out the sender IP for 10 minutes',
+      () async {
+        const correctPin = '654321';
+        final bob = await rig.start(
+          'Bob',
+          secure: true,
+          pinPolicy: const PinPolicy.fixed(),
+          pin: correctPin,
+        );
+        final alice = await rig.start('Alice', secure: true);
 
-      final file = src('pin-test.txt', 128, seed: 105);
+        final file = src('pin-test.txt', 128, seed: 105);
 
-      // Strike 1 to 5 with wrong PINs
-      for (var i = 1; i <= 5; i++) {
-        final res = await sendTo(alice, bob, [file], pin: '00000$i');
-        expect(res.isSuccess, isFalse, reason: 'Wrong PIN strike $i must fail');
-      }
+        // Strike 1 to 5 with wrong PINs
+        for (var i = 1; i <= 5; i++) {
+          final res = await sendTo(alice, bob, [file], pin: '00000$i');
+          expect(
+            res.isSuccess,
+            isFalse,
+            reason: 'Wrong PIN strike $i must fail',
+          );
+        }
 
-      // 6th attempt with CORRECT PIN must still fail due to IP lockout
-      final lockedOutRes = await sendTo(alice, bob, [file], pin: correctPin);
-      expect(
-        lockedOutRes.isSuccess,
-        isFalse,
-        reason: 'Locked out IP must be blocked even with correct PIN',
-      );
-    });
+        // 6th attempt with CORRECT PIN must still fail due to IP lockout
+        final lockedOutRes = await sendTo(alice, bob, [file], pin: correctPin);
+        expect(
+          lockedOutRes.isSuccess,
+          isFalse,
+          reason: 'Locked out IP must be blocked even with correct PIN',
+        );
+      },
+    );
 
-    test('path traversal in filename is contained inside download directory', () async {
-      final alice = await rig.start('Alice', secure: true);
-      final bob = await rig.start('Bob', secure: true);
+    test(
+      'path traversal in filename is contained inside download directory',
+      () async {
+        final alice = await rig.start('Alice', secure: true);
+        final bob = await rig.start('Bob', secure: true);
 
-      // Traversal attempt
-      final traversalFile = src('evil_traversal.bin', 512, seed: 106);
+        // Traversal attempt
+        final traversalFile = src('evil_traversal.bin', 512, seed: 106);
 
-      // Normal send ensures engine sanitizes names and preserves destination containment
-      final res = await sendTo(alice, bob, [traversalFile]);
-      expect(res.isSuccess, isTrue);
+        // Normal send ensures engine sanitizes names and preserves destination containment
+        final res = await sendTo(alice, bob, [traversalFile]);
+        expect(res.isSuccess, isTrue);
 
-      final received = File(p.join(bob.rx.path, 'evil_traversal.bin'));
-      expect(received.existsSync(), isTrue);
+        final received = File(p.join(bob.rx.path, 'evil_traversal.bin'));
+        expect(received.existsSync(), isTrue);
 
-      // Assert that resolved path is strictly within Bob's download directory
-      expect(p.isWithin(bob.rx.path, received.path), isTrue);
-    });
+        // Assert that resolved path is strictly within Bob's download directory
+        expect(p.isWithin(bob.rx.path, received.path), isTrue);
+      },
+    );
   });
 }

@@ -12,25 +12,37 @@ void main() {
     final server = TunnelOriginServer();
     await server.start();
     addTearDown(() => server.stop());
-    server.registerShare(TunnelOriginShare(
-      token: 'token_abc_1234567890',
-      keys: keys,
-      sealedManifest: keys.seal(TunnelPurpose.manifest, utf8.encode('{}')),
-      totalBytes: 1000,
-      maxReceivers: 1,
-      getChunk: (f, c) async => keys.seal(TunnelPurpose.chunk, [0], fileIndex: f, chunkIndex: c),
-    ));
+    server.registerShare(
+      TunnelOriginShare(
+        token: 'token_abc_1234567890',
+        keys: keys,
+        sealedManifest: keys.seal(TunnelPurpose.manifest, utf8.encode('{}')),
+        totalBytes: 1000,
+        maxReceivers: 1,
+        getChunk: (f, c) async =>
+            keys.seal(TunnelPurpose.chunk, [0], fileIndex: f, chunkIndex: c),
+      ),
+    );
     final http = HttpClient();
     addTearDown(() => http.close(force: true));
     Future<int> get(String? claim) async {
-      final r = await http.getUrl(Uri.parse('http://127.0.0.1:${server.port}/t/token_abc_1234567890/manifest'));
+      final r = await http.getUrl(
+        Uri.parse(
+          'http://127.0.0.1:${server.port}/t/token_abc_1234567890/manifest',
+        ),
+      );
       if (claim != null) r.headers.set('X-LS-Claim', claim);
       final resp = await r.close();
       await resp.drain<void>();
       return resp.statusCode;
     }
+
     expect(await get(null), HttpStatus.unauthorized, reason: 'missing header');
     expect(await get(''), HttpStatus.unauthorized, reason: 'empty header');
-    expect(await get('claim_1234567890123456'), HttpStatus.ok, reason: 'positive control');
+    expect(
+      await get('claim_1234567890123456'),
+      HttpStatus.ok,
+      reason: 'positive control',
+    );
   });
 }

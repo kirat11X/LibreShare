@@ -7,7 +7,10 @@ void main() {
     final keys = TunnelKeys.fromRootKey(List<int>.filled(32, 7));
     final a = keys.seal(TunnelPurpose.manifest, [1, 2, 3]);
     final b = keys.seal(TunnelPurpose.manifest, [1, 2, 3]);
-    expect(a.sublist(0, kTunnelNonceBytes), isNot(b.sublist(0, kTunnelNonceBytes)));
+    expect(
+      a.sublist(0, kTunnelNonceBytes),
+      isNot(b.sublist(0, kTunnelNonceBytes)),
+    );
     expect(a, isNot(b));
   });
 }

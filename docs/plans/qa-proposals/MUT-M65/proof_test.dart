@@ -13,13 +13,15 @@ void main() {
   final pin = 'ab' * 32;
   test('valid pin without candidates -> tlsPinHex null', () {
     final l = ShareLink.parse(
-        'https://libreshare.github.io/r#v=1&h=node1.trycloudflare.com&t=$t&k=$k&m=1&pin=$pin');
+      'https://libreshare.github.io/r#v=1&h=node1.trycloudflare.com&t=$t&k=$k&m=1&pin=$pin',
+    );
     expect(l.candidates, isEmpty);
     expect(l.tlsPinHex, isNull);
   });
   test('pin with a valid public candidate is kept (positive control)', () {
     final l = ShareLink.parse(
-        'https://libreshare.github.io/r#v=1&h=node1.trycloudflare.com&t=$t&k=$k&m=1&d=ipv6:[2606:4700::1]:4430&pin=$pin');
+      'https://libreshare.github.io/r#v=1&h=node1.trycloudflare.com&t=$t&k=$k&m=1&d=ipv6:[2606:4700::1]:4430&pin=$pin',
+    );
     expect(l.candidates, isNotEmpty);
     expect(l.tlsPinHex, pin);
   });

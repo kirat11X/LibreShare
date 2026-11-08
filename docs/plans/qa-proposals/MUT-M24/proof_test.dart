@@ -13,15 +13,36 @@ void main() {
     const ck = 64 * 1024;
     final sha = 'ab' * 32;
     final mod = DateTime.utc(2026, 10, 30);
-    final s = await ResumeStore.open(partialFile: partial, size: 10 * ck, chunkSize: ck, chunkCount: 10, sha256: sha, modified: mod);
+    final s = await ResumeStore.open(
+      partialFile: partial,
+      size: 10 * ck,
+      chunkSize: ck,
+      chunkCount: 10,
+      sha256: sha,
+      modified: mod,
+    );
     await s.markReceived(0);
     await s.flush();
     final raf = partial.openSync(mode: FileMode.write);
     raf.truncateSync(ck);
     raf.closeSync();
-    final same = await ResumeStore.open(partialFile: partial, size: 10 * ck, chunkSize: ck, chunkCount: 10, sha256: sha, modified: mod);
+    final same = await ResumeStore.open(
+      partialFile: partial,
+      size: 10 * ck,
+      chunkSize: ck,
+      chunkCount: 10,
+      sha256: sha,
+      modified: mod,
+    );
     expect(same.resumed, isTrue, reason: 'positive control');
-    final other = await ResumeStore.open(partialFile: partial, size: 10 * ck - 1, chunkSize: ck, chunkCount: 10, sha256: sha, modified: mod);
+    final other = await ResumeStore.open(
+      partialFile: partial,
+      size: 10 * ck - 1,
+      chunkSize: ck,
+      chunkCount: 10,
+      sha256: sha,
+      modified: mod,
+    );
     expect(other.resumed, isFalse);
   });
 }

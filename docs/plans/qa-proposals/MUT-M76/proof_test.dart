@@ -11,6 +11,9 @@ void main() {
     });
   }
   test('fec0::1 (outside /10) is not link-local', () {
-    expect(IpClassifier.classify('fec0::1').category, isNot(IpCategory.linkLocal));
+    expect(
+      IpClassifier.classify('fec0::1').category,
+      isNot(IpCategory.linkLocal),
+    );
   });
 }

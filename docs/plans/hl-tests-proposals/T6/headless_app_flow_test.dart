@@ -61,7 +61,10 @@ class _StubTransfers extends TransfersNotifier {
 
   @override
   void dismiss(String key) {
-    state = [for (final item in state) if (item.key != key) item];
+    state = [
+      for (final item in state)
+        if (item.key != key) item,
+    ];
   }
 }
 

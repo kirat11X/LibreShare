@@ -11,7 +11,10 @@ void main() {
     const codec = EnvelopeCodecImpl();
     final a = codec.seal(record: rec, envelopeKey: key, channelIdHex: 'ch');
     final b = codec.seal(record: rec, envelopeKey: key, channelIdHex: 'ch');
-    expect(a.sublist(0, kRendezvousNonceBytes), isNot(b.sublist(0, kRendezvousNonceBytes)));
+    expect(
+      a.sublist(0, kRendezvousNonceBytes),
+      isNot(b.sublist(0, kRendezvousNonceBytes)),
+    );
     expect(a, isNot(b));
   });
 }

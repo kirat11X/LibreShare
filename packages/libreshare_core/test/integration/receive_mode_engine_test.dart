@@ -329,7 +329,7 @@ void main() {
     expect(e.receive.state, isA<Failed>());
     expect(e.isRunning, isFalse);
 
-    blocker.close();
+    await blocker.close();
     await e.receive.turnOn(const ReceiveAlways());
     expect(e.receive.state, isA<On>());
     expect(e.port, kPortFallbackMax);

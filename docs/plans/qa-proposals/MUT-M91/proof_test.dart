@@ -9,7 +9,10 @@ import 'package:test/test.dart';
 
 Uint8List _b32(BigInt v) {
   final h = v.toRadixString(16).padLeft(64, '0');
-  return Uint8List.fromList([for (var i = 0; i < 32; i++) int.parse(h.substring(i * 2, i * 2 + 2), radix: 16)]);
+  return Uint8List.fromList([
+    for (var i = 0; i < 32; i++)
+      int.parse(h.substring(i * 2, i * 2 + 2), radix: 16),
+  ]);
 }
 
 void main() {
@@ -26,10 +29,24 @@ void main() {
       final k = BigInt.from(kk * 7919);
       final R = (curve.G * k)!;
       final rx = _b32(R.x!.toBigInteger()!);
-      final e = bytesToBigInt(bip340TaggedHash('BIP0340/challenge', [...rx, ...pk, ...msg])) % n;
+      final e =
+          bytesToBigInt(
+            bip340TaggedHash('BIP0340/challenge', [...rx, ...pk, ...msg]),
+          ) %
+          n;
       final s = (k + e * d) % n;
-      final ok = verifyBip340(pubKeyBytes: pk, message: msg, sig: Uint8List.fromList([...rx, ..._b32(s)]));
-      if (hasEvenY(R)) { sawEven = true; expect(ok, isTrue); } else { sawOdd = true; expect(ok, isFalse); }
+      final ok = verifyBip340(
+        pubKeyBytes: pk,
+        message: msg,
+        sig: Uint8List.fromList([...rx, ..._b32(s)]),
+      );
+      if (hasEvenY(R)) {
+        sawEven = true;
+        expect(ok, isTrue);
+      } else {
+        sawOdd = true;
+        expect(ok, isFalse);
+      }
     }
     expect(sawOdd && sawEven, isTrue);
   });

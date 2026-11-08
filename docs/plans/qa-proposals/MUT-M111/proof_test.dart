@@ -15,7 +15,11 @@ void main() {
     final advA = Uint8List.fromList(List.generate(32, (i) => i));
     final advB = Uint8List.fromList(List.generate(32, (i) => 255 - i));
     final alice = BleCoordinator(
-      self: const DeviceInfo(deviceId: 'alice-dev', alias: 'Alice', platform: 'linux'),
+      self: const DeviceInfo(
+        deviceId: 'alice-dev',
+        alias: 'Alice',
+        platform: 'linux',
+      ),
       identity: idAlice,
       trustStore: InMemoryTrustStore(),
       peerRegistry: PeerRegistry(selfDeviceId: 'alice-dev'),
@@ -25,20 +29,31 @@ void main() {
       probeLanCandidate: (c) async => true,
     );
     final bob = BleCoordinator(
-      self: const DeviceInfo(deviceId: 'bob-dev', alias: 'Bob', platform: 'android'),
+      self: const DeviceInfo(
+        deviceId: 'bob-dev',
+        alias: 'Bob',
+        platform: 'android',
+      ),
       identity: idBob,
       trustStore: InMemoryTrustStore(),
       peerRegistry: PeerRegistry(selfDeviceId: 'bob-dev'),
       bleBackend: bus.createBackend(deviceId: 'dev_bob', address: 'BB:02'),
       advKey: advB,
-      localLanCandidates: () => [const LanCandidate(ip: '192.168.1.60', port: 53319)],
+      localLanCandidates: () => [
+        const LanCandidate(ip: '192.168.1.60', port: 53319),
+      ],
       // no onTransferPrompt: default rule must decline an unpaired sender
     );
     await alice.start();
     await bob.start();
     final result = await alice.sendOffer(
       peerDeviceId: 'dev_bob',
-      offer: const BleOffer(offerId: 'o1', fileCount: 1, totalSize: 10, firstName: 'a.txt'),
+      offer: const BleOffer(
+        offerId: 'o1',
+        fileCount: 1,
+        totalSize: 10,
+        firstName: 'a.txt',
+      ),
       onConfirmSas: (sas) async => true,
     );
     expect(result.accepted, isFalse);

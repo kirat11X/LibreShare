@@ -13,12 +13,14 @@ void main() {
   final pin = 'ab' * 32;
   test('unknown candidate kind is dropped', () {
     final l = ShareLink.parse(
-        'https://libreshare.github.io/r#v=1&h=node1.trycloudflare.com&t=$t&k=$k&m=1&d=bogus:93.184.216.34:443&pin=$pin');
+      'https://libreshare.github.io/r#v=1&h=node1.trycloudflare.com&t=$t&k=$k&m=1&d=bogus:93.184.216.34:443&pin=$pin',
+    );
     expect(l.candidates, isEmpty);
   });
   test('known kind with same host is kept (positive control)', () {
     final l = ShareLink.parse(
-        'https://libreshare.github.io/r#v=1&h=node1.trycloudflare.com&t=$t&k=$k&m=1&d=manual:93.184.216.34:443&pin=$pin');
+      'https://libreshare.github.io/r#v=1&h=node1.trycloudflare.com&t=$t&k=$k&m=1&d=manual:93.184.216.34:443&pin=$pin',
+    );
     expect(l.candidates, hasLength(1));
   });
 }
