@@ -11,9 +11,9 @@ The current target is an **MVP** ([docs/plans/mvp.md](docs/plans/mvp.md)): send 
 | Increment / Stage | Scope | Status | Evidence / Reference |
 |---|---|---|---|
 | Increments 1–2 | Protocol, transfer, discovery (multicast, mDNS, subnet scan, QR/manual), Linux/Windows/Android app shell, tray, receive mode | **Done** | Emulator-verified Android <-> Linux transfers up to 600 MiB; see [docs/dev/testing-prototype.md](docs/dev/testing-prototype.md) |
-| Increment 3 | Security & verification: TLS 1.3 with certificate pinning, signed client proof, SAS 6-digit code, PIN, consent, signed goodbye, Contacts-only gate | **In progress** | Building blocks reviewed with ~180 mutation checks; engine + CLI wiring in progress |
-| MVP-App & F3 | Security screens in app (SAS display, PIN, key-change warning), Android download folder and usability fixes | In progress / Planned | [docs/plans/mvp.md](docs/plans/mvp.md) |
-| Increments 4–7 | Connection ladder & resume, internet tunnel, free rendezvous, BLE/hotspot, packaging | Deferred (post-MVP) | [docs/plans/mvp.md](docs/plans/mvp.md) |
+| Increment 3 | Security & verification: TLS 1.3 with certificate pinning, signed client proof, SAS 6-digit code, PIN, consent, signed goodbye, Contacts-only gate | **Done** | Core wiring, comprehensive security test suite, and UI screens implemented |
+| Increments 4–5 | Connection ladder & NAT traversal (STUN, UPnP/IGD, NAT-PMP), tunnel crypto (AES-256-GCM), share links & rendezvous | **Done** | Integration tests, candidate race, and transfer engine verified |
+| Packaging & Builds | Precompiled releases for Android, Linux, and Windows in [`builds/`](builds/) | **Done** | Verified artifacts with SHA-256 checksums |
 
 For live development status, see [docs/plans/STATUS.md](docs/plans/STATUS.md). Per-requirement traceability is tracked in [docs/traceability.md](docs/traceability.md). Prototype testing instructions are in [docs/dev/testing-prototype.md](docs/dev/testing-prototype.md).
 
@@ -36,6 +36,7 @@ Candidates are tried in order, like ICE, and the transfer resumes from its chunk
 ├── pubspec.yaml                    Dart pub workspace root
 ├── analysis_options.yaml           lints (strict-casts, strict-raw-types)
 ├── .fvmrc                          pinned Flutter 3.47.9 (Dart 3.13.7)
+├── builds/                         precompiled releases (Android APKs, Linux bundle, Windows build)
 ├── docs/
 │   ├── LIBRESHARE_BUILD_SPEC.md    source of truth for scope, protocol and increments
 │   ├── protocol/LSP-1.md           normative wire protocol (+ schemas/*.schema.json)
@@ -78,28 +79,38 @@ Older prototype builds use unencrypted HTTP; secure transfers use TLS 1.3 by def
 
 Run a single test: `cd packages/libreshare_core && dart test test/unit/chunker_test.dart -N "last chunk"`.
 
-## Install
+## Precompiled Builds & Installation
 
-Pre-built prototype artifacts reside in `dist/prototype/` (validated with `sha256sum -c SHA256SUMS`). Detailed testing steps and platform notes are in [docs/dev/testing-prototype.md](docs/dev/testing-prototype.md).
+Pre-built releases are committed directly to the [`builds/`](builds/) directory (validated with `sha256sum -c SHA256SUMS`). Detailed testing steps and platform notes are in [docs/dev/testing-prototype.md](docs/dev/testing-prototype.md).
+
+- **Android:**
+  APKs are available directly in [`builds/`](builds/):
+  - [`libreshare-1.0.0-android-arm64-v8a.apk`](builds/libreshare-1.0.0-android-arm64-v8a.apk) — modern phones and tablets *(Recommended)*
+  - [`libreshare-1.0.0-android-universal.apk`](builds/libreshare-1.0.0-android-universal.apk) — universal package for all Android 10+ devices
+  - [`libreshare-1.0.0-android-armeabi-v7a.apk`](builds/libreshare-1.0.0-android-armeabi-v7a.apk) — older 32-bit devices
+  - [`libreshare-1.0.0-android-x86_64.apk`](builds/libreshare-1.0.0-android-x86_64.apk) — Android emulators and ChromeOS
+
+  Install via ADB:
+  ```bash
+  adb install -r builds/libreshare-1.0.0-android-arm64-v8a.apk
+  ```
+  Or transfer the APK file to your phone and tap to install (enable "Install unknown apps" when prompted). Keep the app open and screen on during active transfers.
 
 - **Linux:**
-  Extract and run the Linux x64 bundle:
+  Extract and run the Linux x64 bundle from [`builds/`](builds/):
   ```bash
-  tar xzf libreshare-1.0.0-linux-x64.tar.gz && cd libreshare-1.0.0-linux-x64 && ./libreshare_app
+  tar xzf builds/libreshare-1.0.0-linux-x64.tar.gz && cd libreshare-1.0.0-linux-x64 && ./libreshare_app
   ```
   Requires GTK 3. Allow UDP 53318 and TCP 53318–53327 on your private network (e.g. Fedora: `sudo firewall-cmd --add-port=53318/udp --add-port=53318-53327/tcp`, add `--permanent` to persist). Received files go to `~/Downloads/LibreShare`.
 
-- **Android:**
-  Install the APK on an Android 10+ device (`adb install -r libreshare-1.0.0-android-arm64-v8a.apk` or copy the APK to the phone and allow "install unknown apps"). Use `libreshare-1.0.0-android-arm64-v8a.apk` for modern phones or `libreshare-1.0.0-android-universal.apk` if needed. Install only one flavour (version-code constraint requires an uninstall before switching flavours). Keep the app open and screen on during transfers.
+- **Windows:**
+  The Windows release package is built natively on Windows (`tools/package_prototype.sh windows` or `cd apps\libreshare_app && flutter build windows --release`) and packaged in [`builds/`](builds/) as `libreshare-1.0.0-windows-x64.zip`. Unzip and execute `libreshare_app.exe` to launch.
 
 - **Docker (Headless Node):**
   A headless LibreShare node ("drop box" service that receives into a folder and can also send) installs with one command:
   - Linux (Docker Engine): `deploy/install.sh`
   - Windows/macOS (Docker Desktop with WSL2 backend and Linux containers): `powershell -ExecutionPolicy Bypass -File deploy\install.ps1`
   Full options, limits, and troubleshooting: [docs/dev/docker-install.md](docs/dev/docker-install.md).
-
-- **Windows:**
-  Build via Windows PC or GitHub Actions; not built yet. Flutter cannot cross-compile Windows binaries on Linux. To build: run `tools/package_prototype.sh windows` on a Windows machine with Flutter 3.47.9 and Visual Studio C++ build tools, or trigger the GitHub Actions workflow (`.github/workflows/prototype.yml`). Details in [docs/dev/testing-prototype.md](docs/dev/testing-prototype.md) and [docs/dev/prototype-1.md](docs/dev/prototype-1.md).
 
 ## Known limits
 
