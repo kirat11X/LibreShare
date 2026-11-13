@@ -42,7 +42,7 @@ cd libreshare-1.0.0-linux-x64
 ---
 
 ### macOS (Apple Silicon & Intel)
-* **Application Archive:** `libreshare-1.0.0-macos.zip` (containing `LibreShare.app`)
+* **Application Archive:** [`libreshare-1.0.0-macos.zip`](libreshare-1.0.0-macos.zip) (~21 MiB) — *macOS App bundle*
 
 #### macOS Run Instructions
 1. Unzip `libreshare-1.0.0-macos.zip`.
@@ -53,7 +53,7 @@ cd libreshare-1.0.0-linux-x64
      ```bash
      xattr -cr /Applications/LibreShare.app
      ```
-4. To build locally on a Mac (requires Xcode):
+4. To build locally on a Mac:
    ```bash
    tools/release/package-macos.sh
    ```
@@ -61,7 +61,7 @@ cd libreshare-1.0.0-linux-x64
 ---
 
 ### iOS (iPhone & iPad)
-* **IPA Package:** `libreshare-1.0.0-ios.ipa` (unsigned release IPA)
+* **IPA Package:** [`libreshare-1.0.0-ios.ipa`](libreshare-1.0.0-ios.ipa) (~8.6 MiB) — *Unsigned Release IPA (iPhone/iPad)*
 
 #### iOS Installation (Sideloading)
 1. **Using AltStore / SideStore**:
