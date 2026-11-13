@@ -105,10 +105,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: ubuntu-latest, target: linux }
-          - { os: ubuntu-latest, target: apk }
-          - { os: windows-latest, target: windows }
-          - { os: macos-latest, target: macos }
+          - { os: ubuntu-latest, target: linux, extra_args: '' }
+          - { os: ubuntu-latest, target: apk, extra_args: '' }
+          - { os: windows-latest, target: windows, extra_args: '' }
+          - { os: macos-latest, target: macos, extra_args: '' }
+          - { os: macos-latest, target: ios, extra_args: '--no-codesign' }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
@@ -137,7 +138,7 @@ jobs:
         run: cd apps/libreshare_app && xvfb-run -a flutter test integration_test -d linux
 
       - name: Build
-        run: cd apps/libreshare_app && flutter build ${{ matrix.target }} --release
+        run: cd apps/libreshare_app && flutter build ${{ matrix.target }} --release ${{ matrix.extra_args }}
 
       - uses: actions/upload-artifact@v4
         with:

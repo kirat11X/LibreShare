@@ -1,0 +1,109 @@
+name: Apple Builds (macOS & iOS)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  FLUTTER_VERSION: "3.47.9"
+
+jobs:
+  macos-build:
+    name: Build macOS Application
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Resolve workspace dependencies
+        run: dart pub get
+
+      - name: Build macOS Release Bundle
+        run: |
+          cd apps/libreshare_app
+          flutter config --enable-macos-desktop
+          flutter build macos --release
+
+      - name: Package macOS App
+        run: |
+          mkdir -p dist
+          APP_PATH=""
+          for candidate in \
+            "apps/libreshare_app/build/macos/Build/Products/Release/LibreShare.app" \
+            "apps/libreshare_app/build/macos/Build/Products/Release/libreshare_app.app"; do
+            if [ -d "$candidate" ]; then
+              APP_PATH="$candidate"
+              break
+            fi
+          done
+          if [ -z "$APP_PATH" ]; then
+            echo "Error: .app bundle not found" >&2
+            exit 1
+          fi
+          echo "Packaging $APP_PATH..."
+          (cd "$(dirname "$APP_PATH")" && zip -qry "$GITHUB_WORKSPACE/dist/libreshare-macos.zip" "$(basename "$APP_PATH")")
+          (cd "$GITHUB_WORKSPACE/dist" && shasum -a 256 libreshare-macos.zip > libreshare-macos.zip.sha256)
+
+      - name: Upload macOS Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libreshare-macos
+          path: |
+            dist/libreshare-macos.zip
+            dist/libreshare-macos.zip.sha256
+
+  ios-build:
+    name: Build iOS Application (iPhone)
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Resolve workspace dependencies
+        run: dart pub get
+
+      - name: Build iOS Release (Unsigned)
+        run: |
+          cd apps/libreshare_app
+          flutter build ios --no-codesign --release
+
+      - name: Package iOS IPA
+        run: |
+          mkdir -p dist
+          APP_PATH="apps/libreshare_app/build/ios/iphoneos/Runner.app"
+          if [ ! -d "$APP_PATH" ]; then
+            echo "Error: Runner.app not found at $APP_PATH" >&2
+            exit 1
+          fi
+          STAGE="$(mktemp -d)"
+          mkdir -p "$STAGE/Payload"
+          cp -a "$APP_PATH" "$STAGE/Payload/"
+          (cd "$STAGE" && zip -qry "$GITHUB_WORKSPACE/dist/libreshare-ios.ipa" Payload)
+          rm -rf "$STAGE"
+          (cd "$GITHUB_WORKSPACE/dist" && shasum -a 256 libreshare-ios.ipa > libreshare-ios.ipa.sha256)
+
+      - name: Upload iOS Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libreshare-ios
+          path: |
+            dist/libreshare-ios.ipa
+            dist/libreshare-ios.ipa.sha256

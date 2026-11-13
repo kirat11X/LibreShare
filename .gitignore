@@ -17,6 +17,8 @@ apps/libreshare_app/.flutter-plugins
 apps/libreshare_app/.flutter-plugins-dependencies
 apps/libreshare_app/linux/flutter/ephemeral
 apps/libreshare_app/windows/flutter/ephemeral
+apps/libreshare_app/macos/Flutter/ephemeral
+apps/libreshare_app/ios/Flutter/ephemeral
 
 # Scratch and diagnostic probes
 test_c_*

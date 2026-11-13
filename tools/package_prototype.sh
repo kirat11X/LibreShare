@@ -30,7 +30,11 @@ VERSION="${VERSION:-0.0.0}"
 
 targets=("$@")
 if [ ${#targets[@]} -eq 0 ]; then
-  targets=(linux)
+  if [ "$(uname)" = "Darwin" ]; then
+    targets=(macos)
+  else
+    targets=(linux)
+  fi
   if [ -d "${ANDROID_HOME:-/nonexistent}" ]; then targets+=(android); fi
 fi
 
@@ -129,16 +133,83 @@ build_windows() {
   need "$zip" "Windows zip"
 }
 
+build_macos() {
+  if ! command -v xcodebuild >/dev/null 2>&1; then
+    echo "xcodebuild not found: install Xcode and run sudo xcode-select -s /Applications/Xcode.app/Contents/Developer" >&2
+    failures=$((failures + 1))
+    return
+  fi
+  run_flutter "flutter build macos --release" build macos --release || {
+    failures=$((failures + 1))
+    return
+  }
+  local app=""
+  for candidate in \
+    "$APP/build/macos/Build/Products/Release/LibreShare.app" \
+    "$APP/build/macos/Build/Products/Release/libreshare_app.app"; do
+    if [ -d "$candidate" ]; then
+      app="$candidate"
+      break
+    fi
+  done
+  if [ -z "$app" ]; then
+    echo "MISSING macOS .app bundle" >&2
+    failures=$((failures + 1))
+    return
+  fi
+  local name="libreshare-$VERSION-macos"
+  local zip="$OUT/$name.zip"
+  rm -f "$zip"
+  (cd "$(dirname "$app")" && zip -qry "$zip" "$(basename "$app")")
+  need "$zip" "macOS zip"
+}
+
+build_ios() {
+  if ! command -v xcodebuild >/dev/null 2>&1; then
+    echo "xcodebuild not found: install Xcode and run sudo xcode-select -s /Applications/Xcode.app/Contents/Developer" >&2
+    failures=$((failures + 1))
+    return
+  fi
+  run_flutter "flutter build ios --no-codesign --release" build ios --no-codesign --release || {
+    failures=$((failures + 1))
+    return
+  }
+  local app="$APP/build/ios/iphoneos/Runner.app"
+  if [ ! -d "$app" ]; then
+    echo "MISSING iOS Runner.app" >&2
+    failures=$((failures + 1))
+    return
+  fi
+  local name="libreshare-$VERSION-ios"
+  local stage
+  stage="$(mktemp -d)"
+  mkdir -p "$stage/Payload"
+  cp -a "$app" "$stage/Payload/"
+  (cd "$stage" && zip -qry "$OUT/$name.ipa" Payload)
+  rm -rf "$stage"
+  need "$OUT/$name.ipa" "iOS unsigned IPA"
+}
+
 for t in "${targets[@]}"; do
   case "$t" in
     linux) build_linux ;;
     android) build_android ;;
     windows) build_windows ;;
+    macos) build_macos ;;
+    ios) build_ios ;;
     *) echo "unknown target: $t" >&2; failures=$((failures + 1)) ;;
   esac
 done
 
-(cd "$OUT" && : >SHA256SUMS && for f in *.tar.gz *.apk *.zip; do [ -f "$f" ] && sha256sum "$f" >>SHA256SUMS; done; true)
+(cd "$OUT" && : >SHA256SUMS && for f in *.tar.gz *.apk *.zip *.ipa; do
+  if [ -f "$f" ]; then
+    if command -v sha256sum >/dev/null 2>&1; then
+      sha256sum "$f" >>SHA256SUMS
+    else
+      shasum -a 256 "$f" >>SHA256SUMS
+    fi
+  fi
+done; true)
 echo "---- $OUT"
 ls -la "$OUT"
 if [ "$failures" -ne 0 ]; then

@@ -38,3 +38,41 @@ cd libreshare-1.0.0-linux-x64
 
 ### Windows x64
 * Windows release build is generated via `tools/package_prototype.sh windows` (or `flutter build windows --release`) and uploaded as `libreshare-1.0.0-windows-x64.zip`.
+
+---
+
+### macOS (Apple Silicon & Intel)
+* **Application Archive:** `libreshare-1.0.0-macos.zip` (containing `LibreShare.app`)
+
+#### macOS Run Instructions
+1. Unzip `libreshare-1.0.0-macos.zip`.
+2. Move `LibreShare.app` to your `/Applications` folder.
+3. If macOS blocks opening due to Gatekeeper (unnotarized developer build):
+   - Right-click `LibreShare.app` and choose **Open**, then click **Open** in the dialog.
+   - Or run in Terminal:
+     ```bash
+     xattr -cr /Applications/LibreShare.app
+     ```
+4. To build locally on a Mac (requires Xcode):
+   ```bash
+   tools/release/package-macos.sh
+   ```
+
+---
+
+### iOS (iPhone & iPad)
+* **IPA Package:** `libreshare-1.0.0-ios.ipa` (unsigned release IPA)
+
+#### iOS Installation (Sideloading)
+1. **Using AltStore / SideStore**:
+   - Open AltStore on your iPhone.
+   - Tap `+` and select `libreshare-1.0.0-ios.ipa` to sign and install with your Apple ID.
+2. **Using Sideloadly**:
+   - Connect your iPhone to your Mac via USB.
+   - Drag `libreshare-1.0.0-ios.ipa` into Sideloadly and enter your Apple ID to sign and install.
+3. **Using TrollStore (iOS 14.0–17.0)**:
+   - Direct install without 7-day revokes.
+4. To build locally on a Mac (requires Xcode):
+   ```bash
+   tools/release/package-ios.sh
+   ```
