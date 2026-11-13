@@ -147,6 +147,8 @@ NativeSha256Provider? _tryCandidate(
   String Function(String hex)? tamper,
 ) {
   if (name.isEmpty) return null;
+  // macOS dyld aborts the process on unversioned system libcrypto.dylib.
+  if (Platform.isMacOS && name.contains('libcrypto.dylib')) return null;
   try {
     final lib = DynamicLibrary.open(name);
     final backend = Platform.isWindows ? _BcryptBackend(lib) : _EvpBackend(lib);
