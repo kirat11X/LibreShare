@@ -374,7 +374,7 @@ class _AboutCard extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              'Version 1.0.0',
+              'Version 1.0.1',
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
