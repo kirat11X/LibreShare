@@ -37,7 +37,11 @@ cd libreshare-1.0.0-linux-x64
 ---
 
 ### Windows x64
-* Windows release build is generated via `tools/package_prototype.sh windows` (or `flutter build windows --release`) and uploaded as `libreshare-1.0.0-windows-x64.zip`.
+* **Application Archive:** [`libreshare-1.0.0-windows-x64.zip`](libreshare-1.0.0-windows-x64.zip) (~13.4 MiB) — *Windows x64 Release Bundle*
+
+#### Windows Run Instructions
+1. Extract `libreshare-1.0.0-windows-x64.zip`.
+2. Double-click `libreshare_app.exe` to launch.
 
 ---
 
