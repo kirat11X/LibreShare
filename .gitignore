@@ -29,3 +29,9 @@ test_*.c
 packages/libreshare_core/test/scratch_*.dart
 builds/
 
+# Keystore and release secrets
+*.keystore
+*.jks
+**/key.properties
+
+

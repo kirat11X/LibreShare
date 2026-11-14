@@ -9,62 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [1.0.1] - 2026-11-14
+
 ### Added
 
-#### Integration Suite & System Conformance (I1 - Complete)
-- **Link Share End-to-End (`i1_link_share_e2e_test.dart`):** Full end-to-end link share over `FakeTunnelProvider`, downloading multi-chunk files via `OriginPullPeerClient`, verifying byte-identical SHA-256 match, and confirming zero key fragment leakage into logs.
-- **NAT Origin Ladder Integration (`i1_nat_ladder_integration_test.dart`):** Direct origin server racing with staggered 250ms candidate progression across UPnP, NAT-PMP, and PCP gateway responders with certificate pin checks.
-- **Internet Rendezvous End-to-End (`i1_rendezvous_integration_test.dart`):** Multi-transport presence signaling across in-memory Nostr relays and ntfy channels, BIP-340 Schnorr signature validation, and SAS pairing confirmation.
-- **BLE & Hotspot Policy Integration (`i1_ble_hotspot_policy_integration_test.dart`):** Offline proximity discovery with rotating EIDs and automatic hotspot role negotiation.
-- **Cross-Increment Regression Gate (`i1_cross_increment_regression_test.dart`):** Resumption from chunk bitmap, FR-13 mid-transfer fallback, SpeedMode profiles, and PIN brute-force lockout guard.
+#### Web Share Mode & Progressive Web App (PWA)
+- **Zero-Install Web Portal (`WebPortalAssets`, `WebPortalHandler`, `WebPortalService`):** Lightweight, self-contained single-page application built directly into `packages/libreshare_core` (no Flutter imports). Allows any browser on the local Wi-Fi to send and receive files without installing LibreShare.
+- **Progressive Web App (PWA) & Manifest (`/web/manifest.json`):** Full standalone PWA support. Mobile and desktop browsers can install LibreShare with one tap directly from the portal header (via `beforeinstallprompt` on Android/Chrome/Edge and iOS Safari "Add to Home Screen" instructions).
+- **HTTP 206 Partial Content (Range Requests):** Chunked byte-range downloads enabling instant file streaming, download pausing, and resuming.
+- **PIN Security & Rate Limiting:** Optional access PIN with brute-force defense returning HTTP 429 after 5 failed authentication attempts.
+- **Path Sanitization & Collision Resolution:** Automatic stripping of directory traversal characters and automatic deduplication (`file (1).ext`) for inbound uploads.
 
-#### Containerized Verification & Network Testing (I2 - Complete)
-- **Docker Step q:** Validated real link transfer over HTTP with candidate filtering (`--hide-ip`) and byte-identical file integrity.
-- **Docker Step r:** Validated NAT-PMP gateway listener reachability and port mapping semantics.
-- **Docker Step s:** Containerized Nostr/ntfy relay environment and asserted peer isolation.
+#### Flutter App Web Portal Screen (`apps/libreshare_app`)
+- **Interactive Web Portal Screen (`WebPortalScreen`):** Full-screen management dashboard to toggle the web portal on/off, display live connection URLs, and copy links with one tap.
+- **Instant QR Code Sharing:** Dynamic `PrettyQrView` QR code rendering the exact local LAN address for instant camera scanning by smartphones, tablets, and laptops.
+- **File Management & Upload Stream:** Interactive UI to pick and share local files for browser downloads, plus real-time listing of files uploaded by web clients with direct "Open Folder" action.
+- **Home Screen Action Shortcut:** Quick-access globe button on the main app bar for 1-tap navigation to the Web Portal.
+- **State Architecture:** Managed via Riverpod `webPortalProvider` tied to the engine lifecycle and system network interfaces.
 
-#### Increment 6 (Decentralized Internet Rendezvous - LSP-R1 - Delivered)
-- **Nostr & ntfy Rendezvous Backends:** Free internet signaling with discrete padding bucketing (512, 1024, 2048, 4096 bytes) and failover.
-- **BIP-340 Schnorr Cryptography:** Pure-Dart SECP256k1 signing, verification, and NIP-01 canonical JSON serialization.
-- **Pairing SAS:** Out-of-band mutual authentication using 4-word PGP/RFC-1751 wordlists.
+#### CLI Web Portal Command (`packages/libreshare_cli`)
+- **`ls web` Command:** Headless command line interface to host the Web Portal from any terminal:
+  ```bash
+  ls web [--dir DIR] [--share FILE...] [--port 53320] [--pin PIN] [--alias NAME]
+  ```
+- Instant console output of active LAN URLs, optional PINs, and live upload events.
 
-#### Increment 7 (Bluetooth Low Energy & Hotspot Engine - LS-BLE/1 - Delivered)
-- **BLE Beacon Codec & Ephemeral EIDs:** 8-byte rotating EID derivation via HMAC with +-1 epoch drift tolerance and 10-minute time-boxed visibility.
-- **Encrypted GATT Handshake:** Ephemeral X25519 key exchange, authenticated transcript signatures, and AES-256-GCM session framing.
-- **Hotspot Election Policy:** Deterministic host selection (`chooseHost`) across platform pairs with graceful teardown.
+#### Android Release Signing & Security
+- **Configurable Release Signing (`build.gradle.kts`):** Added production release signing support reading from `key.properties` and CI environment variables (`KEYSTORE_PATH`, `KEYSTORE_PASSWORD`, etc.), preventing debug key lock-in before distribution.
+- **Keystore Template:** Added `apps/libreshare_app/android/key.properties.example` with setup instructions.
+- **Secret Protection:** Added `*.keystore`, `*.jks`, and `key.properties` to `.gitignore`.
 
-#### Increment 5b (Direct Internet Paths & Port Mapping Contracts - Applied)
-- **Contracts & Seams (K0):** Defined `OriginKind`, `PortMapping`, `GatewayInfo`, `PortMapper`, and `ReachabilityProbe` interfaces.
-- **Pure IP Classifier & STUN Client (K1):** Table-driven IP categorization (`IpClassifier`) distinguishing global unicast, RFC 1918 private, CGNAT (100.64.0.0/10), ULA, and loopback ranges; RFC 5389 STUN binding request client and reachability probe.
-- **Port Mapping Protocols (K2):** Full UPnP-IGD, NAT-PMP, and PCP implementations with hostile gateway SSRF mitigations (RFC 1918 bound, XML cap <= 64 KiB, no redirects), port collision retries, and unmap-on-exit leak prevention in `UnifiedPortMapper`.
-
-#### Increment 5 Groundwork (Applied)
-- **Tunnel Crypto Engine (H1):** RFC 5869 HKDF subkey derivation (`sid`, `manifest`, `data`, `ack`, `sas`), random 96-bit nonces, AAD authentication, and 2^24 seal count security limits.
-- **Share Link Model (H2):** Canonical URL fragment parsing/encoding with strict host bounds, base64url secrets, and parameter validation.
-- **Secret Redactor (H3):** Pure, idempotent log sanitization redacting secret keys, tokens, PINs, and sensitive fragments without false positives on hashes.
-
-#### Increment 4 (Speed & Platform Baselines - Applied)
-- **Native SHA-256 via FFI:** Hardware-accelerated hashing engine binding OpenSSL `libcrypto` / Windows `bcrypt` with pure-Dart fallback, scaling hashing speeds to >500 MiB/s.
-- **Speed Profiles:** Configurable `eco`, `balanced`, and `turbo` modes tuning buffer sizes, parallelism, and chunk pipeline depth.
-- **Speed Regression Gate:** Automated benchmarking gate enforcing throughput regressions (47-91 MiB/s secure, 65-147 MiB/s plain).
-
-#### High-Level Test Suites (Applied)
-- **CLI Matrix E2E (T2):** Real process send/receive matrix covering 0-byte files, nested directories, unicode names, path traversal defenses, 2 GiB sparse files, and transfer cancellation.
-- **Protocol Fuzz & Property Tests (T3):** Seeded fuzzers for frame codecs, filename sanitization, and chunk-range arithmetic.
-- **Security Threat Model Regressions (T4):** Test suites validating mTLS certificate pinning, PIN brute-force lockout, and log hygiene.
-- **Soak & Stress Tests (T5):** Multi-session stress testing, 1,000 tiny files transfer, and bounded RSS memory growth.
-- **Windows Path & File Semantics (T7):** Strict verification of Windows reserved names, alternate data streams (`:Zone.Identifier`), and file locking semantics.
-- **Live Schema Conformance (T8):** Strict JSON-schema validation across all live wire protocol frames and LSP-1 message definitions.
-
-### Planned
-- Cloudflare Quick Tunnel and zrok encrypted fallback paths (Increment 5).
-- Background Android Receive Service (P9) with persistent notification controls.
-- Interactive camera QR-code pairing screen and contacts management UI.
-- Native Windows DPAPI secure credential storage.
+#### Dual-Licensing Model
+- **GNU AGPLv3 + Commercial Rights Reserved:** Explicit licensing architecture protecting open-source peer-to-peer usage while retaining commercial multiplatform distribution rights.
 
 ---
 
-## [1.0.0] - unreleased
+## [1.0.0] - 2026-11-09
 
 ### Added
 

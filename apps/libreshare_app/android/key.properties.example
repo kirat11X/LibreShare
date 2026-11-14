@@ -1,0 +1,11 @@
+# Example Android release keystore configuration.
+# Copy this file to `apps/libreshare_app/android/key.properties` and populate with your credentials.
+#
+# To generate a new production release keystore:
+#   keytool -genkey -v -keystore app/upload-keystore.jks -keyalg RSA -keysize 2048 -validity 10000 -alias upload
+#
+# Remember to never commit `key.properties` or `*.jks`/`*.keystore` files to git.
+storePassword=your_keystore_password
+keyPassword=your_key_password
+keyAlias=upload
+storeFile=app/upload-keystore.jks
