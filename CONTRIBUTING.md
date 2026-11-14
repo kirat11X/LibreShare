@@ -1,6 +1,6 @@
 # Contributing to LibreShare
 
-Thank you for your interest in contributing to LibreShare! LibreShare is a free, open-source peer-to-peer file sharing application licensed under the MIT License.
+Thank you for your interest in contributing to LibreShare! LibreShare is an open-source peer-to-peer file sharing application dual-licensed under the GNU AGPLv3 and a Commercial License.
 
 This guide outlines our development workflow, architectural boundaries, and coding standards.
 

@@ -6,7 +6,7 @@
 
 **High-speed, end-to-end encrypted, peer-to-peer file sharing for your local network and beyond.**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: AGPLv3 / Commercial](https://img.shields.io/badge/License-AGPLv3%20%7C%20Commercial-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Android%20%7C%20iOS%20%7C%20Linux%20%7C%20Windows%20%7C%20macOS-brightgreen.svg)](#precompiled-downloads)
 [![Flutter](https://img.shields.io/badge/Flutter-3.47.9-02569B?logo=flutter)](https://flutter.dev)
 [![Dart](https://img.shields.io/badge/Dart-3.13.7-0175C2?logo=dart)](https://dart.dev)
@@ -240,6 +240,10 @@ tools/loopback_smoke.sh 100 53400
 
 ---
 
-## License
+## License & Commercial Rights
 
-LibreShare is licensed under the [MIT License](LICENSE).
+LibreShare is dual-licensed:
+
+* **Open-Source (GNU AGPLv3):** Free for personal and community use under the [GNU Affero General Public License v3.0](LICENSE). Any modifications or derivative network services must remain free and open source under AGPLv3.
+* **Commercial License:** All commercial, closed-source, OEM, and proprietary distribution rights are reserved exclusively by the copyright holder. If you wish to use or distribute LibreShare commercially without AGPLv3 copyleft terms, please obtain a commercial license.
+* **Trademarks & Branding:** "LibreShare" and the official project logos are trademarks. Third-party forks must rebrand and use distinct names and logos.

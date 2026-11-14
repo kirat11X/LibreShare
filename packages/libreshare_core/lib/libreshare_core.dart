@@ -125,3 +125,8 @@ export 'src/rendezvous/nostr_backend.dart';
 export 'src/rendezvous/presence_cache.dart';
 export 'src/rendezvous/rendezvous_service_impl.dart';
 export 'src/rendezvous/ntfy_backend.dart';
+
+export 'src/web_portal/web_portal_models.dart';
+export 'src/web_portal/web_portal_assets.dart';
+export 'src/web_portal/web_portal_handler.dart';
+export 'src/web_portal/web_portal_service.dart';

@@ -379,6 +379,14 @@ class _AboutCard extends StatelessWidget {
                 color: theme.colorScheme.onSurfaceVariant,
               ),
             ),
+            const SizedBox(height: 4),
+            Text(
+              'GNU AGPLv3 / Dual-Licensed',
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: theme.colorScheme.primary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
             const SizedBox(height: 8),
             Text(
               'Open-source, end-to-end encrypted peer-to-peer file sharing for your local network and beyond.',
