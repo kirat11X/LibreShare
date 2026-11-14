@@ -1,8 +1,0 @@
-# R4a apply notes
-Files: new `packages/libreshare_core/lib/src/server/capped_server_socket.dart`, edit `packages/libreshare_core/lib/src/server/api_server.dart` (patch.diff, `diff -uN`, apply from repo root with `patch -p1`), new test `packages/libreshare_core/test/security/connection_cap_test.dart` (copy in this folder).
-Order: api_server.dart is also touched by R4e (regression test) and R1a (file_receiver/api_server paths). R4a changes only the constructor (2 params), `start`, `stop` and `_bind` of ApiServer, so hunks are separate from request-handling code. Apply R4a FIRST (it changes how the listener is bound: HttpServer.listenOn over CappedServerSocket instead of HttpServer.bind/bindSecure), then R1a and R4e; re-run `patch --dry-run` for each and re-run their tests, since any test that touches `HttpServer.bind` internals or counts sockets depends on this.
-Re-run after applying: connection_cap_test.dart, whole core and cli suites.
-
-Round 2: also apply the verifier's probe file as a regular test: `docs/plans/e-proposals/r4a/verifier-tests/connection_cap_verifier_probes_test.dart` -> `packages/libreshare_core/test/security/connection_cap_verifier_probes_test.dart` (unchanged, 20 tests, green with this patch). patch.diff now includes the handshake timeout (`tlsHandshakeTimeout` argument of ApiServer, default 10 s).
-
-Round 3: patch.diff is now `diff -ruN` against the CURRENT real tree, only api_server.dart and capped_server_socket.dart (dry-run on a copy: rc 0). Tests to copy into packages/libreshare_core/test/security/: connection_cap_test.dart, and from verifier-tests/ connection_cap_verifier_probes_test.dart and connection_cap_verifier_round2_test.dart (both unchanged, green).

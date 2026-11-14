@@ -27,3 +27,5 @@ test_*.c
 *.log
 *.orig
 packages/libreshare_core/test/scratch_*.dart
+builds/
+
