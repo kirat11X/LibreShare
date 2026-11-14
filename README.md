@@ -1,13 +1,13 @@
 <div align="center">
 
-<img src="docs/images/app-icon.png" alt="LibreShare Logo" width="120" height="120" />
+<img src="docs/images/logo.png" alt="LibreShare Logo" width="160" />
 
 # LibreShare
 
 **High-speed, end-to-end encrypted, peer-to-peer file sharing for your local network and beyond.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-Android%20%7C%20Linux%20%7C%20Windows-brightgreen.svg)](#precompiled-downloads)
+[![Platform](https://img.shields.io/badge/Platform-Android%20%7C%20iOS%20%7C%20Linux%20%7C%20Windows%20%7C%20macOS-brightgreen.svg)](#precompiled-downloads)
 [![Flutter](https://img.shields.io/badge/Flutter-3.47.9-02569B?logo=flutter)](https://flutter.dev)
 [![Dart](https://img.shields.io/badge/Dart-3.13.7-0175C2?logo=dart)](https://dart.dev)
 [![Security](https://img.shields.io/badge/Security-TLS%201.3%20%7C%20Pinned%20Certs%20%7C%20SAS-orange.svg)](#security--privacy)
@@ -20,7 +20,7 @@
 
 ## Overview
 
-**LibreShare** is a free and open-source cross-platform file transfer tool built for Windows, Linux, and Android (with macOS best-effort). Devices on the same Wi-Fi or local area network automatically discover each other via multicast and mDNS.
+**LibreShare** is a free and open-source cross-platform file transfer tool built for Android, iOS, Linux, macOS, and Windows. Devices on the same Wi-Fi or local area network automatically discover each other via multicast and mDNS.
 
 Files are streamed directly peer-to-peer in **4 MiB chunks**, each cryptographically checked with **SHA-256**, allowing interrupted transfers to **resume immediately without re-downloading existing chunks**. When no direct local route exists, LibreShare automatically falls back to an end-to-end encrypted (AES-256-GCM) tunnel as a last resort.
 
@@ -92,7 +92,7 @@ sequenceDiagram
 
 ## Precompiled Downloads
 
-Ready-to-run releases are tracked directly in the [`builds/`](builds/) directory with verified SHA-256 checksums:
+Ready-to-run release packages for all platforms are tracked directly in the [`builds/`](builds/) directory with verified SHA-256 checksums:
 
 | Platform | Package | Architecture | Size | Installation / Run |
 | :--- | :--- | :--- | :--- | :--- |
@@ -100,8 +100,10 @@ Ready-to-run releases are tracked directly in the [`builds/`](builds/) directory
 | **Android** | [`libreshare-1.0.0-android-universal.apk`](builds/libreshare-1.0.0-android-universal.apk) | Universal (All Devices) | ~81 MiB | Direct APK install on Android 10+ |
 | **Android** | [`libreshare-1.0.0-android-armeabi-v7a.apk`](builds/libreshare-1.0.0-android-armeabi-v7a.apk) | 32-bit ARM | ~25 MiB | Legacy Android devices |
 | **Android** | [`libreshare-1.0.0-android-x86_64.apk`](builds/libreshare-1.0.0-android-x86_64.apk) | x86_64 | ~31 MiB | Emulators / ChromeOS |
+| **iOS** | [`libreshare-1.0.0-ios.ipa`](builds/libreshare-1.0.0-ios.ipa) | iPhone & iPad | ~8.6 MiB | Sideload via AltStore / SideStore / Sideloadly |
 | **Linux** | [`libreshare-1.0.0-linux-x64.tar.gz`](builds/libreshare-1.0.0-linux-x64.tar.gz) | x64 (GLIBC 2.31+) | ~11.5 MiB | Extract and run `./libreshare_app` |
-| **Windows** | `libreshare-1.0.0-windows-x64.zip` | x64 (Windows 10/11) | ~18 MiB | Extract and run `libreshare_app.exe` |
+| **macOS** | [`libreshare-1.0.0-macos.zip`](builds/libreshare-1.0.0-macos.zip) | Apple Silicon & Intel | ~21 MiB | Unzip & move `LibreShare.app` to `/Applications` |
+| **Windows** | [`libreshare-1.0.0-windows-x64.zip`](builds/libreshare-1.0.0-windows-x64.zip) | x64 (Windows 10/11) | ~13.4 MiB | Extract and run `libreshare_app.exe` |
 
 *Verify all packages with: `cd builds && sha256sum -c SHA256SUMS`.*
 
@@ -109,7 +111,10 @@ Ready-to-run releases are tracked directly in the [`builds/`](builds/) directory
 
 ## Quick Start
 
-### 1. Run the Desktop App (Linux)
+### 1. Run on Android
+Install the APK directly onto your device (`adb install -r builds/libreshare-1.0.0-android-arm64-v8a.apk`) or transfer it to your phone and tap to install (enable "Install unknown apps" when prompted). Keep the app open and screen on during transfers.
+
+### 2. Run on Linux
 ```bash
 tar xzf builds/libreshare-1.0.0-linux-x64.tar.gz
 cd libreshare-1.0.0-linux-x64
@@ -117,14 +122,28 @@ cd libreshare-1.0.0-linux-x64
 ```
 *Tip: Ensure UDP 53318 (discovery) and TCP 53317–53349 (transfer) are permitted on your local firewall.*
 
-### 2. Run the Desktop App (Windows)
-Unzip `builds/libreshare-1.0.0-windows-x64.zip` and run `libreshare_app.exe`. Alternatively, build from source on Windows:
-```powershell
-cd apps\libreshare_app
-flutter build windows --release
-```
+### 3. Run on Windows
+1. Download and extract [`builds/libreshare-1.0.0-windows-x64.zip`](builds/libreshare-1.0.0-windows-x64.zip).
+2. Double-click `libreshare_app.exe` to launch.
+*(Or build from source on Windows: `cd apps\libreshare_app && flutter build windows --release`)*
 
-### 3. Run the Command-Line Tool (CLI)
+### 4. Run on macOS
+1. Download and extract [`builds/libreshare-1.0.0-macos.zip`](builds/libreshare-1.0.0-macos.zip).
+2. Drag `LibreShare.app` into your `/Applications` folder.
+3. If Gatekeeper prompts about an unnotarized developer build:
+   - Right-click `LibreShare.app` and choose **Open**, then confirm **Open**.
+   - Or clear the quarantine attribute in Terminal:
+     ```bash
+     xattr -cr /Applications/LibreShare.app
+     ```
+
+### 5. Install on iOS (iPhone & iPad)
+Install the unsigned [`builds/libreshare-1.0.0-ios.ipa`](builds/libreshare-1.0.0-ios.ipa) using your preferred sideloading method:
+* **AltStore / SideStore:** Open AltStore, tap `+`, select `libreshare-1.0.0-ios.ipa`, and enter your Apple ID.
+* **Sideloadly:** Connect your iPhone via USB, drag `libreshare-1.0.0-ios.ipa`, and click Start.
+* **TrollStore (iOS 14.0–17.0):** Direct install without 7-day certificate revokes.
+
+### 6. Run the Command-Line Tool (CLI)
 LibreShare ships with a full-featured standalone CLI:
 ```bash
 source tools/env.sh
@@ -136,7 +155,7 @@ dart run packages/libreshare_cli/bin/ls.dart receive --dir /tmp/downloads --auto
 dart run packages/libreshare_cli/bin/ls.dart send document.pdf --to 192.168.1.50:53318
 ```
 
-### 4. Headless Docker Node
+### 7. Headless Docker Node
 Deploy a headless drop-box service on a home server or NAS:
 ```bash
 # Linux

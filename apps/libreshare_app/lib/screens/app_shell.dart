@@ -75,6 +75,21 @@ class AppShell extends ConsumerWidget {
                   selectedIndex: shell.currentIndex,
                   onDestinationSelected: select,
                   labelType: NavigationRailLabelType.all,
+                  leading: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    child: Tooltip(
+                      message: 'LibreShare',
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(10),
+                        child: Image.asset(
+                          'assets/logo/app_icon.png',
+                          width: 36,
+                          height: 36,
+                          fit: BoxFit.contain,
+                        ),
+                      ),
+                    ),
+                  ),
                   destinations: [
                     for (final d in destinations)
                       NavigationRailDestination(

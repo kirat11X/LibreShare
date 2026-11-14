@@ -72,11 +72,13 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
-  # Tray icons (lib/platform/tray); regenerate with assets/src/make_tray_icons.py.
-  # Files are listed one by one so the generator script is not bundled.
+  # App logos and tray icons
+  # Files are listed one by one so generator scripts are not bundled.
   assets:
     - assets/tray/tray_idle.png
     - assets/tray/tray_active.png
+    - assets/logo/logo.png
+    - assets/logo/app_icon.png
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
