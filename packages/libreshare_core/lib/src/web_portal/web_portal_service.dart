@@ -33,9 +33,16 @@ class WebPortalService {
 
   int get port => _server?.port ?? 0;
 
-  Uri? get portalUri {
+  Uri? get portalUri => getPortalUri();
+
+  /// Returns the Web Portal URI, optionally substituting a specific host/IP
+  /// (such as the LAN Wi-Fi IP) when bound to `0.0.0.0`.
+  Uri? getPortalUri({String? host}) {
     if (!isRunning) return null;
-    final address = _server!.address.address;
+    var address = host ?? _server!.address.address;
+    if (address == '0.0.0.0' || address == '::') {
+      address = '127.0.0.1';
+    }
     return Uri.parse('http://$address:$port/web');
   }
 
@@ -44,7 +51,11 @@ class WebPortalService {
     if (isRunning) return;
 
     final targetAddress = bindAddress ?? InternetAddress.anyIPv4;
-    _server = await HttpServer.bind(targetAddress, preferredPort);
+    try {
+      _server = await HttpServer.bind(targetAddress, preferredPort);
+    } catch (_) {
+      _server = await HttpServer.bind(targetAddress, 0);
+    }
     shelf_io.serveRequests(_server!, handler.handler);
   }
 

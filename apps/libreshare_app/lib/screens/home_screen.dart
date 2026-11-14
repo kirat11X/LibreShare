@@ -64,6 +64,12 @@ class HomeScreen extends ConsumerWidget {
             onPressed: () => context.push('/my-qr'),
           ),
           IconButton(
+            key: const Key('action-web-portal'),
+            tooltip: 'Web Portal (Browser Share)',
+            icon: const Icon(Icons.language),
+            onPressed: () => context.push('/web-portal'),
+          ),
+          IconButton(
             key: const Key('action-history'),
             tooltip: 'Transfer History',
             icon: const Icon(Icons.history),

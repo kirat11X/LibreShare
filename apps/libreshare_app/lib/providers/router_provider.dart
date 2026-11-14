@@ -10,6 +10,7 @@ import '../screens/my_qr_screen.dart';
 import '../screens/scan_qr_screen.dart';
 import '../screens/settings_screen.dart';
 import '../screens/transfer_screen.dart';
+import '../screens/web_portal_screen.dart';
 import 'navigation_provider.dart';
 
 /// Where the app starts (tests override it to open a screen directly).
@@ -68,6 +69,11 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/history',
         parentNavigatorKey: rootKey,
         builder: (context, state) => const HistoryScreen(),
+      ),
+      GoRoute(
+        path: '/web-portal',
+        parentNavigatorKey: rootKey,
+        builder: (context, state) => const WebPortalScreen(),
       ),
       GoRoute(
         path: '/transfer/:key',

@@ -51,6 +51,7 @@ Commands:
                                                            [--provider cloudflare|zrok|fake|manual:URL]
   receive-link Download files from a share link            ls receive-link LINK [--dir DIR]
                                                            [--insecure-dev-allow-loopback]
+  web        Serve Web Portal for browser / PWA sharing    ls web [--dir DIR] [--share FILE...] [--port 53320] [--pin PIN]
 
 Options of every command that talks to a peer:
   --secure (default) | --insecure-plaintext   TLS with a pinned identity, or the plain Increment 1/2 wire
@@ -609,6 +610,30 @@ Future<int> runCli(
     ..addOption('alias');
   _addProfileOptions(receiveLinkParser);
 
+  parser.addCommand('web')
+    ..addOption(
+      'dir',
+      help: 'directory to save uploaded files (defaults to current dir)',
+    )
+    ..addMultiOption(
+      'share',
+      abbr: 's',
+      help: 'files to share for download with browsers',
+    )
+    ..addOption(
+      'port',
+      defaultsTo: '53320',
+      help: 'port to bind the web portal HTTP server',
+    )
+    ..addOption(
+      'pin',
+      help: 'optional PIN required for browser access',
+    )
+    ..addOption(
+      'alias',
+      help: 'device name displayed on the web portal',
+    );
+
   final ArgResults top;
   try {
     top = parser.parse(args);
@@ -657,6 +682,8 @@ Future<int> runCli(
       return _receiveLink(cmd, io, hooks);
     case 'peers':
       return _peers(cmd, io);
+    case 'web':
+      return _web(cmd, io, hooks);
   }
   return 64;
 }
@@ -2052,4 +2079,102 @@ Future<int> _peers(ArgResults r, _Io io) async {
   } finally {
     await w.close();
   }
+}
+
+// --------------------------------------------------------------------- web
+
+class _CliWebStorageDelegate implements WebPortalStorageDelegate {
+  _CliWebStorageDelegate(this.downloadDirectory, this.onReceived);
+
+  @override
+  final Directory downloadDirectory;
+  final void Function(WebUploadResult result) onReceived;
+
+  @override
+  Future<void> onFileReceived(WebUploadResult result) async {
+    onReceived(result);
+  }
+}
+
+Future<int> _web(ArgResults r, _Io io, CliHooks h) async {
+  final dirArg = r['dir'] as String?;
+  final downloadDir = dirArg == null ? Directory.current : Directory(dirArg);
+  if (!downloadDir.existsSync()) {
+    downloadDir.createSync(recursive: true);
+  }
+
+  final port = int.tryParse(r['port'] as String? ?? '53320') ?? 53320;
+  final pin = r['pin'] as String?;
+  final alias = r['alias'] as String? ?? 'LibreShare';
+  final sharePaths = r['share'] as List<String>? ?? const [];
+
+  final sharedFiles = <WebSharedFile>[];
+  for (final path in sharePaths) {
+    final file = File(path);
+    if (file.existsSync()) {
+      final segments = file.uri.pathSegments;
+      final name = segments.isNotEmpty
+          ? segments.lastWhere((s) => s.isNotEmpty, orElse: () => 'file')
+          : 'file';
+      sharedFiles.add(
+        WebSharedFile(
+          id: const Uuid().v4(),
+          name: name,
+          size: file.lengthSync(),
+          mimeType: 'application/octet-stream',
+          file: file,
+        ),
+      );
+    } else {
+      io.err('Warning: file not found: $path');
+    }
+  }
+
+  final config = WebPortalConfig(
+    deviceName: alias,
+    pin: pin,
+  );
+
+  final delegate = _CliWebStorageDelegate(
+    downloadDir,
+    (result) {
+      io.out('RECEIVED ${result.originalName} ${result.bytesWritten} ${result.savedPath}');
+    },
+  );
+
+  final service = WebPortalService(
+    config: config,
+    storageDelegate: delegate,
+    getSharedFiles: () => sharedFiles,
+    preferredPort: port,
+  );
+
+  await service.start(bindAddress: h.bindAddress);
+
+  // Find best LAN IP
+  final ifaces = await const SystemNetworkInterfaceProvider().list();
+  final bestIp = ifaces.where((i) => i.kind == 'wifi').firstOrNull?.address.address ??
+      ifaces.where((i) => i.kind == 'ethernet').firstOrNull?.address.address ??
+      ifaces.firstOrNull?.address.address ??
+      '127.0.0.1';
+
+  final portalUri = service.getPortalUri(host: bestIp) ?? service.portalUri;
+
+  io.out('WEB_PORTAL_ACTIVE $portalUri');
+  if (pin != null) {
+    io.out('WEB_PORTAL_PIN $pin');
+  }
+
+  final interrupt = _Interrupt(h);
+  while (!interrupt.isFired) {
+    await Future.any([
+      Future<void>.delayed(const Duration(milliseconds: 100)),
+      interrupt.fired,
+    ]);
+  }
+
+  await service.stop();
+  await interrupt.close();
+  io.out('WEB_PORTAL_STOPPED');
+  return 0;
 }
