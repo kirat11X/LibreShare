@@ -33,12 +33,13 @@ LibreShare is a free, open-source file transfer app for Android, iOS, Linux, mac
 
 ## What's New
 
-### November 2026
+### November 2026 (v1.0.1)
 * **Web Portal (Browser Share)**: Send and receive files with any device that has a browser. Nothing to install on the other side. Scan a QR code, optionally protect it with a PIN, and drag-and-drop to upload or tap to download. Browsers can even install it as a PWA. Available in the app (home screen) and the CLI (`ls web`).
-* **macOS and iOS builds, plus a Windows x64 package**: LibreShare now ships for all five major platforms from one codebase.
-* **New branding**: App logo and icons across Android, iOS, macOS, Windows, and Linux.
-* **Dual licensing**: GNU AGPLv3 for open-source use, commercial license available.
+* **Multi-Platform Native Icons & Branding**: Integrated new official LibreShare geometric branding and generated native icons across Android, iOS, macOS, Windows, and Linux.
+* **Dual-Licensing Model**: Adopted GNU AGPLv3 for open source + Commercial Rights Reserved by author Kirat.
+* **macOS and iOS builds, plus Windows x64 package**: LibreShare now ships for all five major platforms from one codebase.
 * **macOS fix**: Resolved a `libcrypto` load crash in the packaged app.
+* *Full v1.0.1 patch notes available in [UPDATE.md](UPDATE.md).*
 
 ### Under the Hood (Core Engine)
 * **Native SHA-256 via FFI** (OpenSSL `libcrypto` / Windows `bcrypt`, pure-Dart fallback). Hashing runs above 500 MiB/s.
@@ -58,13 +59,13 @@ Get the latest builds from the [Releases page](https://github.com/kirat11X/Libre
 
 | Platform | Package | Notes |
 | :--- | :--- | :--- |
-| **Android** | `libreshare-1.0.0-android-arm64-v8a.apk` | Recommended for most phones. Universal, armeabi-v7a and x86_64 APKs also available. Enable "Install unknown apps". |
-| **iOS** | `libreshare-1.0.0-ios.ipa` | Unsigned. Sideload with AltStore, SideStore, Sideloadly or TrollStore. |
-| **Linux** | `libreshare-1.0.0-linux-x64.tar.gz` | x64, GLIBC 2.31+. Extract and run `./libreshare_app`. |
+| **Android** | `libreshare-1.0.1-android-arm64-v8a.apk` | Recommended for most phones. Universal, armeabi-v7a and x86_64 APKs also available. Enable "Install unknown apps". |
+| **Linux** | `libreshare-1.0.1-linux-x64.tar.gz` | x64, GLIBC 2.31+. Extract and run `./libreshare_app`. |
+| **Windows** | `libreshare-1.0.1-windows-x64.zip` | Windows 10/11 x64. Extract and run `libreshare_app.exe`. *(v1.0.0 also available)* |
 | **macOS** | `libreshare-1.0.0-macos.zip` | Apple Silicon and Intel. Move `LibreShare.app` to `/Applications`. |
-| **Windows** | `libreshare-1.0.0-windows-x64.zip` | Windows 10/11 x64. Extract and run `libreshare_app.exe`. |
+| **iOS** | `libreshare-1.0.0-ios.ipa` | Unsigned. Sideload with AltStore, SideStore, Sideloadly or TrollStore. |
 
-*Verify any download with `sha256sum -c SHA256SUMS`.*
+*Verify any download with `sha256sum -c SHA256SUMS-1.0.1` (or `SHA256SUMS` for v1.0.0).*
 
 ---
 
@@ -145,19 +146,19 @@ sequenceDiagram
 ## Quick Start
 
 ### Android
-Install the APK from [Releases](https://github.com/kirat11X/LibreShare/releases/latest), or with `adb install -r libreshare-1.0.0-android-arm64-v8a.apk`. Keep the app open and the screen on during transfers.
+Install the APK from [Releases](https://github.com/kirat11X/LibreShare/releases/latest), or with `adb install -r libreshare-1.0.1-android-arm64-v8a.apk`. Keep the app open and the screen on during transfers.
 
 ### Linux
 ```bash
-tar xzf libreshare-1.0.0-linux-x64.tar.gz
-cd libreshare-1.0.0-linux-x64
+tar xzf libreshare-1.0.1-linux-x64.tar.gz
+cd libreshare-1.0.1-linux-x64
 ./libreshare_app
 ```
 *Allow UDP 53318 (discovery) and TCP 53317–53349 (transfer) through your firewall.*
 
 ### Windows
-Extract `libreshare-1.0.0-windows-x64.zip` and run `libreshare_app.exe`.
-*(Build from source: `cd apps\libreshare_app && flutter build windows --release`)*
+Extract `libreshare-1.0.1-windows-x64.zip` (or `libreshare-1.0.0-windows-x64.zip`) and run `libreshare_app.exe`.
+*(Build from source: `powershell -ExecutionPolicy Bypass -File tools\release\package-windows.ps1`)*
 
 ### macOS
 Unzip, drag `LibreShare.app` to `/Applications`. The build is not notarized, so on first launch either right-click, Open, or run:
