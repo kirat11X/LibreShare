@@ -86,6 +86,28 @@ void main() {
         expect(body, contains('<!DOCTYPE html>'));
       },
     );
+
+    test(
+      'GET /web/manifest.json returns 200, application/manifest+json, and valid PWA manifest',
+      () async {
+        final request = Request(
+          'GET',
+          Uri.parse('http://127.0.0.1/web/manifest.json'),
+        );
+        final response = await portalHandler.handler(request);
+
+        expect(response.statusCode, equals(200));
+        expect(
+          response.headers['content-type'],
+          contains('application/manifest+json'),
+        );
+        final body = await response.readAsString();
+        final manifest = jsonDecode(body) as Map<String, dynamic>;
+        expect(manifest['name'], equals('LibreShare Web Portal'));
+        expect(manifest['display'], equals('standalone'));
+        expect(manifest['start_url'], equals('/web/'));
+      },
+    );
   });
 
   group('API Info & Files', () {
