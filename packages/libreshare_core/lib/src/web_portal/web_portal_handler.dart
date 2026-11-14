@@ -56,6 +56,7 @@ class WebPortalHandler {
     _router = Router()
       ..get('/web', _handleIndex)
       ..get('/web/', _handleIndex)
+      ..get('/web/manifest.json', _handleManifest)
       ..get('/web/api/info', _handleInfo)
       ..get('/web/api/files', _handleFiles)
       ..post('/web/api/auth', _handleAuth)
@@ -77,6 +78,34 @@ class WebPortalHandler {
       headers: {
         'content-type': 'text/html; charset=utf-8',
         'cache-control': 'no-store',
+      },
+    );
+  }
+
+  Response _handleManifest(Request request) {
+    final manifest = {
+      'name': 'LibreShare Web Portal',
+      'short_name': 'LibreShare',
+      'start_url': '/web/',
+      'display': 'standalone',
+      'background_color': '#0f172a',
+      'theme_color': '#0f172a',
+      'description': 'Direct, fast peer-to-peer file sharing on your local Wi-Fi.',
+      'icons': [
+        {
+          'src': 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%233b82f6"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>',
+          'sizes': '192x192 512x512',
+          'type': 'image/svg+xml',
+          'purpose': 'any maskable'
+        }
+      ]
+    };
+
+    return Response.ok(
+      jsonEncode(manifest),
+      headers: {
+        'content-type': 'application/manifest+json',
+        'cache-control': 'public, max-age=86400',
       },
     );
   }

@@ -8,6 +8,12 @@ class WebPortalAssets {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="LibreShare">
+  <meta name="theme-color" content="#0f172a">
+  <link rel="manifest" href="/web/manifest.json">
   <title>LibreShare Web Portal</title>
   <style>
     :root {
@@ -278,9 +284,12 @@ class WebPortalAssets {
           <div class="device-info" id="deviceName">Local Web Portal</div>
         </div>
       </div>
-      <div class="badge">
-        <div class="badge-dot"></div>
-        <span>Connected</span>
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <button id="installAppBtn" class="btn btn-secondary" style="padding: 6px 12px; font-size: 0.8rem; display: none;" onclick="installPwa()">📲 Install App</button>
+        <div class="badge">
+          <div class="badge-dot"></div>
+          <span>Connected</span>
+        </div>
       </div>
     </header>
 
@@ -530,6 +539,44 @@ class WebPortalAssets {
       const dt = e.dataTransfer;
       if (dt && dt.files && dt.files.length) {
         handleFileSelect(dt.files);
+      }
+    });
+
+    let deferredPrompt = null;
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredPrompt = e;
+      const btn = document.getElementById('installAppBtn');
+      if (btn) btn.style.display = 'inline-flex';
+    });
+
+    function installPwa() {
+      if (deferredPrompt) {
+        deferredPrompt.prompt();
+        deferredPrompt.userChoice.then((choiceResult) => {
+          if (choiceResult.outcome === 'accepted') {
+            const btn = document.getElementById('installAppBtn');
+            if (btn) btn.style.display = 'none';
+          }
+          deferredPrompt = null;
+        });
+      } else {
+        const isIos = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+        if (isIos) {
+          alert("To install LibreShare on your device:\n1. Tap the Share button in Safari (box with up arrow)\n2. Scroll down and tap 'Add to Home Screen'");
+        } else {
+          alert("To install, use your browser's menu (⋮) and tap 'Install app' or 'Add to Home screen'.");
+        }
+      }
+    }
+
+    // Show install button for iOS if not already in standalone mode
+    window.addEventListener('DOMContentLoaded', () => {
+      const isIos = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+      const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
+      if (isIos && !isStandalone) {
+        const btn = document.getElementById('installAppBtn');
+        if (btn) btn.style.display = 'inline-flex';
       }
     });
 
